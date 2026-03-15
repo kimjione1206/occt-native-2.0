@@ -10,7 +10,8 @@ namespace LhmSensorReader;
 [JsonSourceGenerationOptions(
     PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase,
     DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
-    WriteIndented = false)]
+    WriteIndented = false,
+    NumberHandling = JsonNumberHandling.AllowNamedFloatingPointLiterals)]
 internal partial class AppJsonContext : JsonSerializerContext { }
 
 public class Program
@@ -92,15 +93,22 @@ public class Program
 
             while (!cts.Token.IsCancellationRequested)
             {
-                var output = CollectSensorData(computer);
                 try
                 {
-                    Console.WriteLine(JsonSerializer.Serialize(output, AppJsonContext.Default.SensorOutput));
+                    var output = CollectSensorData(computer);
+                    var json = JsonSerializer.Serialize(output, AppJsonContext.Default.SensorOutput);
+                    Console.WriteLine(json);
                     Console.Out.Flush();
                 }
                 catch (IOException)
                 {
                     break;
+                }
+                catch (Exception ex)
+                {
+                    var error = new ErrorOutput { Error = "collect_failed", Message = ex.Message };
+                    Console.WriteLine(JsonSerializer.Serialize(error, AppJsonContext.Default.ErrorOutput));
+                    Console.Out.Flush();
                 }
 
                 try
@@ -149,17 +157,21 @@ public class Program
             if (sensor.Value is null)
                 continue;
 
+            float raw = sensor.Value.Value;
+            if (float.IsInfinity(raw) || float.IsNaN(raw))
+                continue;
+
             var entry = new SensorEntry
             {
                 Name = sensor.Name,
                 Type = sensor.SensorType.ToString(),
-                Value = Math.Round(sensor.Value.Value, 1),
+                Value = Math.Round(raw, 1),
                 Unit = MapUnit(sensor.SensorType)
             };
 
-            if (sensor.Min.HasValue)
+            if (sensor.Min.HasValue && !float.IsInfinity(sensor.Min.Value) && !float.IsNaN(sensor.Min.Value))
                 entry.Min = Math.Round(sensor.Min.Value, 1);
-            if (sensor.Max.HasValue)
+            if (sensor.Max.HasValue && !float.IsInfinity(sensor.Max.Value) && !float.IsNaN(sensor.Max.Value))
                 entry.Max = Math.Round(sensor.Max.Value, 1);
 
             sensors.Add(entry);

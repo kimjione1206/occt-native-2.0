@@ -55,16 +55,21 @@ struct LhmBridge::Impl {
         return false;
     }
 
-    bool poll_helper(std::vector<SensorReading>& out) {
+    static constexpr int kFirstPollTimeoutMs = 15000;
+    static constexpr int kNormalTimeoutMs    = 10000;
+
+    bool poll_helper(std::vector<SensorReading>& out, bool first_poll) {
         if (helper_path.isEmpty()) return false;
+
+        const int timeout_ms = first_poll ? kFirstPollTimeoutMs : kNormalTimeoutMs;
 
         QProcess proc;
         proc.setProgram(helper_path);
         proc.setArguments({"--json", "--once"});
         proc.start();
 
-        if (!proc.waitForFinished(30000)) {
-            log("[LHM] Helper timed out after 30s");
+        if (!proc.waitForFinished(timeout_ms)) {
+            log("[LHM] Helper timed out after " + std::to_string(timeout_ms / 1000) + "s");
             proc.kill();
             return false;
         }
@@ -145,17 +150,49 @@ bool LhmBridge::initialize() {
 bool LhmBridge::is_available() const { return available_; }
 
 void LhmBridge::poll(std::vector<SensorReading>& out) {
+    // If in backoff mode, check whether enough time has elapsed before retrying.
+    if (fail_count_ >= 5) {
+        auto now = std::chrono::steady_clock::now();
+        auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(now - last_fail_time_).count();
+        if (elapsed < retry_interval_secs_) {
+            return; // Still waiting for backoff period
+        }
+        impl_->log("[LHM] Recovery: retrying after " + std::to_string(retry_interval_secs_)
+                    + "s backoff (fail_count: " + std::to_string(fail_count_) + ")");
+        available_ = true; // Temporarily re-enable for this attempt
+    }
+
     if (!available_) return;
-    if (!impl_->poll_helper(out)) {
+
+    if (!impl_->poll_helper(out, first_poll_)) {
         fail_count_++;
-        impl_->log("[LHM] Poll failed (attempt " + std::to_string(fail_count_) + "/5)");
+        last_fail_time_ = std::chrono::steady_clock::now();
+        retry_interval_secs_ = compute_retry_interval();
+
         if (fail_count_ >= 5) {
             available_ = false;
-            impl_->log("[LHM] Helper disabled after 5 failures");
+            impl_->log("[LHM] Poll failed (fail_count: " + std::to_string(fail_count_)
+                        + "), next retry in " + std::to_string(retry_interval_secs_) + "s");
+        } else {
+            impl_->log("[LHM] Poll failed (attempt " + std::to_string(fail_count_) + "/5)");
         }
     } else {
-        fail_count_ = 0; // Reset on success
+        if (fail_count_ >= 5) {
+            impl_->log("[LHM] Recovery successful after " + std::to_string(fail_count_) + " failures");
+        }
+        // Full reset on success
+        fail_count_ = 0;
+        retry_interval_secs_ = 0;
+        available_ = true;
     }
+    first_poll_ = false;
+}
+
+int LhmBridge::compute_retry_interval() const {
+    if (fail_count_ >= 20) return 120;
+    if (fail_count_ >= 10) return 60;
+    if (fail_count_ >= 5)  return 30;
+    return 0;
 }
 
 #else
@@ -166,6 +203,7 @@ LhmBridge::~LhmBridge() = default;
 bool LhmBridge::initialize() { return false; }
 bool LhmBridge::is_available() const { return false; }
 void LhmBridge::poll(std::vector<SensorReading>& /*out*/) {}
+int LhmBridge::compute_retry_interval() const { return 0; }
 
 #endif
 

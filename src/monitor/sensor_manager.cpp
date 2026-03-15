@@ -279,11 +279,15 @@ void SensorManager::update_reading(const std::string& sensor_name,
                                    double value, const std::string& unit) {
     std::lock_guard<std::mutex> lk(readings_mutex_);
 
+    double now = std::chrono::duration<double>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+
     for (auto& r : readings_) {
         if (r.name == sensor_name && r.category == category) {
             r.value = value;
             r.min_value = std::min(r.min_value, value);
             r.max_value = std::max(r.max_value, value);
+            r.last_update_epoch = now;
             return;
         }
     }
@@ -296,6 +300,7 @@ void SensorManager::update_reading(const std::string& sensor_name,
     reading.min_value = value;
     reading.max_value = value;
     reading.unit = unit;
+    reading.last_update_epoch = now;
     readings_.push_back(std::move(reading));
 }
 
@@ -903,6 +908,30 @@ void SensorManager::poll_wmi() {
                 update_reading(r.name, r.category, r.value, r.unit);
             }
             have_lhm_data = true;
+
+            // LHM stale data detection: check if CPU temp is unchanged
+            double cur_temp = 0.0;
+            double cur_power = 0.0;
+            for (const auto& r : lhm_readings) {
+                if (r.category == "CPU" && r.unit == "C" && r.value > cur_temp) {
+                    cur_temp = r.value;
+                }
+                if (r.category == "CPU" && r.unit == "W" && r.value > cur_power) {
+                    cur_power = r.value;
+                }
+            }
+            if (cur_temp > 0.0 && cur_temp == prev_lhm_cpu_temp_ &&
+                cur_power == prev_lhm_cpu_power_) {
+                lhm_stale_count_++;
+                if (lhm_stale_count_ >= 10) {  // 5s at 500ms interval
+                    std::cerr << "[Sensor] LHM data appears stale (unchanged for "
+                              << (lhm_stale_count_ / 2) << "s)" << std::endl;
+                }
+            } else {
+                lhm_stale_count_ = 0;
+            }
+            prev_lhm_cpu_temp_ = cur_temp;
+            prev_lhm_cpu_power_ = cur_power;
         }
     }
 
@@ -991,6 +1020,8 @@ void SensorManager::poll_wmi() {
                             std::cerr << "[Sensor] Win32_PerfFormattedData_Counters_ThermalZoneInformation also returned 0 zones" << std::endl;
                             perf_thermal_logged = true;
                         }
+                        // Stale prevention: explicitly set 0 when no thermal data available
+                        update_reading("ACPI Zone 0", "CPU", 0.0, "C");
                     }
                 }
             }
@@ -1284,17 +1315,23 @@ void SensorManager::poll_nvml() {
 
         if (getTemp) {
             unsigned int temp = 0;
-            if (getTemp(device, 0 /*NVML_TEMPERATURE_GPU*/, &temp) == 0) {
+            auto ret = getTemp(device, 0 /*NVML_TEMPERATURE_GPU*/, &temp);
+            if (ret == 0 && temp > 0) {
                 update_reading(gpu_label + " Temp", "GPU",
                                static_cast<double>(temp), "C");
+            } else {
+                update_reading(gpu_label + " Temp", "GPU", 0.0, "C");  // stale prevention
             }
         }
 
         if (getPower) {
             unsigned int power_mw = 0;
-            if (getPower(device, &power_mw) == 0) {
+            auto ret = getPower(device, &power_mw);
+            if (ret == 0 && power_mw > 0) {
                 update_reading(gpu_label + " Power", "GPU",
                                power_mw / 1000.0, "W");
+            } else {
+                update_reading(gpu_label + " Power", "GPU", 0.0, "W");  // stale prevention
             }
         }
     }
@@ -1429,6 +1466,12 @@ void SensorManager::poll_adl() {
             int temperature = 0;
             // Domain 1 = GPU core temperature for most Overdrive versions
             int status = adl_temp_(adl_context_, i, 1, &temperature);
+
+            std::string sensor_name = "GPU Temperature";
+            if (adl_adapter_count_ > 1) {
+                sensor_name = "GPU " + std::to_string(i) + " Temperature";
+            }
+
             if (status == 0) { // ADL_OK
                 // Temperature may be in millidegrees (1000x) depending on the
                 // Overdrive version. Values > 1000 suggest millidegrees.
@@ -1436,11 +1479,9 @@ void SensorManager::poll_adl() {
                 if (temp_c > 1000.0) {
                     temp_c /= 1000.0;
                 }
-                std::string sensor_name = "GPU Temperature";
-                if (adl_adapter_count_ > 1) {
-                    sensor_name = "GPU " + std::to_string(i) + " Temperature";
-                }
                 update_reading(sensor_name, "GPU", temp_c, "C");
+            } else {
+                update_reading(sensor_name, "GPU", 0.0, "C");  // stale prevention
             }
         }
     }

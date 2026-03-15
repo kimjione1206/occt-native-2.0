@@ -32,6 +32,7 @@ struct SensorReading {
     double min_value = 0.0;
     double max_value = 0.0;
     std::string unit;       // "C", "W", "V", "RPM", "%"
+    double last_update_epoch = 0.0;  // seconds since epoch (steady_clock)
 };
 
 class SensorManager {
@@ -118,6 +119,11 @@ private:
     bool has_nvml_  = false;
     bool has_adl_   = false;
     bool adl_stub_logged_ = false;
+
+    // LHM stale data detection
+    double prev_lhm_cpu_temp_ = -1.0;
+    double prev_lhm_cpu_power_ = -1.0;
+    int lhm_stale_count_ = 0;
 
     // NVML dynamic handles
     void* nvml_handle_ = nullptr;

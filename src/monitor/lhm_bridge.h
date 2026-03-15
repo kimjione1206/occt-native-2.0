@@ -6,6 +6,7 @@
 #include <QString>
 #include <QVector>
 
+#include <chrono>
 #include <functional>
 #include <memory>
 
@@ -41,7 +42,13 @@ private:
     std::unique_ptr<Impl> impl_;
 #endif
     bool available_ = false;
+    bool first_poll_ = true;
     int fail_count_ = 0;
+    int retry_interval_secs_ = 0;
+    std::chrono::steady_clock::time_point last_fail_time_;
+
+    /// Compute backoff interval based on consecutive failure count.
+    int compute_retry_interval() const;
 };
 
 } // namespace occt
