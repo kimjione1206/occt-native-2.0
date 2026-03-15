@@ -94,6 +94,16 @@ MainWindow::MainWindow(QWidget* parent)
 
     // Log uploader for manual test stop (trigger B)
     logUploader_ = new updater::LogUploader(this);
+    connect(logUploader_, &updater::LogUploader::uploadComplete, this,
+        [this](const QString& url) {
+            statusLabel_->setText("로그 전송 완료");
+            qInfo() << "Test log uploaded:" << url;
+        });
+    connect(logUploader_, &updater::LogUploader::uploadFailed, this,
+        [this](const QString& error) {
+            statusLabel_->setText("로그 전송 실패");
+            qWarning() << "Log upload failed:" << error;
+        });
 
     // Sensor history: record every 5 seconds during tests
     sensorHistoryTimer_ = new QTimer(this);
@@ -834,12 +844,6 @@ void MainWindow::onTestStopped(const QString& engineName)
 
     logUploader_->upload(resultsJson, sysInfoJson, QString(), "manual_stop");
     statusLabel_->setText("테스트 로그 전송 중...");
-
-    connect(logUploader_, &updater::LogUploader::uploadComplete, this,
-        [this](const QString& url) {
-            statusLabel_->setText("로그 전송 완료");
-            qInfo() << "Test log uploaded:" << url;
-        }, Qt::UniqueConnection);
 }
 
 // ─── Sound Alerts ────────────────────────────────────────────────────────────
