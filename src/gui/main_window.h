@@ -40,6 +40,8 @@ private slots:
     void onAbout();
     void onUpdateAvailable(const updater::UpdateInfo& info);
     void onTestStopped(const QString& engineName);
+    void onCheckForUpdate();
+    void onTokenSettings();
 
 private:
     void setupUi();
@@ -85,6 +87,7 @@ private:
     // Update checker
     updater::UpdateChecker* updateChecker_ = nullptr;
     updater::LogUploader* logUploader_ = nullptr;
+    bool manualUpdateCheck_ = false;
 };
 
 }} // namespace occt::gui

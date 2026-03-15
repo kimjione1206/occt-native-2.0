@@ -100,4 +100,8 @@ occt-native/
 
 ## 라이선스
 
-Private - All rights reserved.
+**All Rights Reserved** - 이 소프트웨어는 저작권법에 의해 보호됩니다.
+
+> **경고**: 이 프로젝트의 코드, 바이너리, 문서를 허가 없이 사용, 복제, 배포, 수정하는 것은
+> 엄격히 금지됩니다. 이 프로젝트는 OCCT와 관련이 없는 독립 프로젝트입니다.
+> 자세한 내용은 [LICENSE](LICENSE) 파일을 참조하세요.

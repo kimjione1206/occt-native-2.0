@@ -12,6 +12,8 @@ add_library(occt_utils STATIC
     file_logger.h
     crc32.cpp
     crc32.h
+    secure_token_store.cpp
+    secure_token_store.h
     # timer.cpp
     # timer.h
     # system_info.cpp
@@ -30,7 +32,15 @@ target_link_libraries(occt_utils PUBLIC
     Threads::Threads
 )
 
-# macOS sysctl for CPU detection
+# macOS sysctl for CPU detection + Keychain for secure token storage
 if(APPLE)
-    # No extra libraries needed, sysctl is in libSystem
+    find_library(SECURITY_FRAMEWORK Security)
+    if(SECURITY_FRAMEWORK)
+        target_link_libraries(occt_utils PUBLIC ${SECURITY_FRAMEWORK})
+    endif()
+endif()
+
+# Windows DPAPI for secure token storage
+if(WIN32)
+    target_link_libraries(occt_utils PUBLIC crypt32)
 endif()

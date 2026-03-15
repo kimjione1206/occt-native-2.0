@@ -141,6 +141,8 @@ jobs:
             ⚠️ **Internal Development Build** - This is NOT an official OCCT release.
             This project is not affiliated with OCCT. For personal/internal testing only.
 
+            ⚠️ **All Rights Reserved** - Unauthorized use, copying, distribution prohibited.
+
             ---
           generate_release_notes: true
           draft: false

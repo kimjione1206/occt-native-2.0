@@ -12,6 +12,7 @@
 #include "config.h"
 #include "utils/app_config.h"
 #include "utils/portable_paths.h"
+#include "utils/secure_token_store.h"
 
 namespace occt { namespace updater {
 
@@ -46,11 +47,10 @@ QString LogUploader::resolveToken() const
     if (!envToken.isEmpty())
         return QString::fromUtf8(envToken);
 
-    // 3. AppConfig setting
-    const QVariant cfgToken = utils::AppConfig::instance().value(
-        QStringLiteral("Update/gistToken"));
-    if (cfgToken.isValid() && !cfgToken.toString().isEmpty())
-        return cfgToken.toString();
+    // 3. Secure token store (with auto-migration from plaintext)
+    const QString secureToken = utils::SecureTokenStore::instance().retrieveToken();
+    if (!secureToken.isEmpty())
+        return secureToken;
 
     return {};
 }

@@ -30,6 +30,10 @@ add_library(occt_gui STATIC
     panels/certificate_panel.h
     panels/certificate_panel.cpp
 
+    # Dialogs
+    dialogs/token_dialog.h
+    dialogs/token_dialog.cpp
+
     # Custom widgets
     widgets/circular_gauge.h
     widgets/circular_gauge.cpp

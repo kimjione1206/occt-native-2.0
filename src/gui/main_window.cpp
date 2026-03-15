@@ -18,6 +18,7 @@
 #include "../updater/update_downloader.h"
 #include "../updater/update_installer.h"
 #include "../updater/log_uploader.h"
+#include "dialogs/token_dialog.h"
 #include "../engines/cpu_engine.h"
 #include "config.h"
 
@@ -67,6 +68,22 @@ MainWindow::MainWindow(QWidget* parent)
     updateChecker_ = new updater::UpdateChecker(this);
     connect(updateChecker_, &updater::UpdateChecker::updateAvailable,
             this, &MainWindow::onUpdateAvailable);
+    connect(updateChecker_, &updater::UpdateChecker::noUpdateAvailable,
+        this, [this]() {
+            if (manualUpdateCheck_) {
+                QMessageBox::information(this, "업데이트 확인",
+                    QString("현재 최신 버전입니다. (v%1)").arg(OCCT_VERSION_STRING));
+                manualUpdateCheck_ = false;
+            }
+        });
+    connect(updateChecker_, &updater::UpdateChecker::checkFailed,
+        this, [this](const QString& error) {
+            if (manualUpdateCheck_) {
+                QMessageBox::warning(this, "업데이트 확인 실패",
+                    "업데이트를 확인할 수 없습니다.\n" + error);
+                manualUpdateCheck_ = false;
+            }
+        });
     QTimer::singleShot(30000, updateChecker_, &updater::UpdateChecker::checkForUpdate);
 
     // Log uploader for manual test stop (trigger B)
@@ -410,6 +427,8 @@ void MainWindow::createMenuBar()
     auto* fileMenu = mb->addMenu("&파일");
     auto* exportAction = fileMenu->addAction("보고서 내보내기...");
     connect(exportAction, &QAction::triggered, this, &MainWindow::onExportReport);
+    auto* tokenAction = fileMenu->addAction("GitHub 토큰 설정...");
+    connect(tokenAction, &QAction::triggered, this, &MainWindow::onTokenSettings);
     fileMenu->addSeparator();
     auto* exitAction = fileMenu->addAction("종료");
     exitAction->setShortcut(QKeySequence::Quit);
@@ -426,6 +445,9 @@ void MainWindow::createMenuBar()
 
     // Help menu
     auto* helpMenu = mb->addMenu("&도움말");
+    auto* checkUpdateAction = helpMenu->addAction("업데이트 확인...");
+    connect(checkUpdateAction, &QAction::triggered, this, &MainWindow::onCheckForUpdate);
+    helpMenu->addSeparator();
     auto* aboutAction = helpMenu->addAction("정보");
     connect(aboutAction, &QAction::triggered, this, &MainWindow::onAbout);
 }
@@ -581,8 +603,21 @@ void MainWindow::stopAllTests()
 
 // ─── Update & Log Upload ─────────────────────────────────────────────────────
 
+void MainWindow::onCheckForUpdate() {
+    manualUpdateCheck_ = true;
+    statusLabel_->setText("업데이트 확인 중...");
+    updateChecker_->checkForUpdate();
+}
+
+void MainWindow::onTokenSettings() {
+    auto* dialog = new TokenDialog(this);
+    dialog->exec();
+    dialog->deleteLater();
+}
+
 void MainWindow::onUpdateAvailable(const updater::UpdateInfo& info)
 {
+    manualUpdateCheck_ = false;
     auto* dialog = new updater::UpdateDialog(info, OCCT_VERSION_STRING, this);
 
     connect(dialog, &updater::UpdateDialog::updateAccepted, this, [this, info, dialog]() {
