@@ -28,6 +28,14 @@ public:
     QVariantMap lastStorageSettings() const;
     void setLastStorageSettings(const QVariantMap& s);
 
+    // Update settings
+    QString gistToken() const;
+    void setGistToken(const QString& token);
+    QString lastUpdateCheck() const;
+    void setLastUpdateCheck(const QString& timestamp);
+    QString updateSkippedVersion() const;
+    void setUpdateSkippedVersion(const QString& version);
+
     // Generic access
     QVariant value(const QString& key, const QVariant& defaultValue = QVariant()) const;
     void setValue(const QString& key, const QVariant& val);

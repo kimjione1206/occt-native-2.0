@@ -72,6 +72,9 @@ struct CliOptions {
     // Storage block size (Gap 6)
     int block_size_kb = 4;    // Block size in KB (4, 8, 64, 128, 1024, 4096)
 
+    // Post-update auto test
+    bool post_update = false; // Run smoke test after auto-update
+
     // Storage direct I/O (Gap 7)
     bool direct_io = false;   // Use O_DIRECT / FILE_FLAG_NO_BUFFERING
 

@@ -1,7 +1,7 @@
 # OCCT Native - 전체 코드 구조
 
 > 이 문서는 프로젝트 수정 시 반드시 참고해야 하는 코드 구조 레퍼런스입니다.
-> 최종 업데이트: 2026-03-14 (CPU AUTO/AVX_FLOAT 모드, 유니코드 스토리지, AMD ADL, LHM 재시도, lhm-sensor-reader, GUI 멀티시리즈 차트/트레이/단축키/사운드, 한국어 UI, 파일 로깅)
+> 최종 업데이트: 2026-03-15 (LogUploader Gist 업로드, PostUpdateRunner 스모크 테스트)
 
 ## 프로젝트 개요
 
@@ -84,6 +84,13 @@ occt-native/
 │   ├── certification/          # 인증서 시스템
 │   ├── api/                    # cert_store
 │   ├── leaderboard/            # 성능 랭킹
+│   ├── updater/                # 자동 업데이트
+│   │   ├── update_checker.h/cpp      # GitHub Releases 버전 체크
+│   │   ├── update_downloader.h/cpp   # 릴리즈 다운로드
+│   │   ├── update_dialog.h/cpp       # 업데이트 UI 다이얼로그
+│   │   ├── update_installer.h/cpp    # 업데이트 설치
+│   │   ├── log_uploader.h/cpp        # GitHub Secret Gist 로그 업로드
+│   │   └── post_update_runner.h/cpp  # 업데이트 후 스모크 테스트
 │   └── utils/                  # 유틸리티
 │       ├── cpuid.h/cpp             # CPU 감지 (CPUID)
 │       ├── gpu_info.h/cpp          # GPU 센서 (NVML/ADL)
@@ -346,6 +353,26 @@ SafetyGuardian (200ms 폴링)
 - `lhm_bridge.cpp` → `logs/lhm_bridge.log`
 - `storage_engine.cpp` → `logs/storage_engine.log`
 - `file_logger.h/cpp` 유틸리티 사용 (5MB 로테이션)
+
+## 업데이터 서브시스템
+
+```
+src/updater/ (occt_updater 라이브러리)
+├── UpdateChecker    → GitHub Releases API 체크
+├── UpdateDownloader → 릴리즈 에셋 다운로드
+├── UpdateDialog     → 업데이트 확인 UI
+├── UpdateInstaller  → 압축 해제 + 재시작
+├── LogUploader      → GitHub Secret Gist 업로드
+│   ├── 토큰 우선순위: setToken() > $OCCT_GITHUB_TOKEN > AppConfig "Update/gistToken"
+│   ├── 로그 파일: PortablePaths::logsDir() 최신 파일, 최대 100KB (tail)
+│   └── Gist 페이로드: test_results.json + system_info.json + app.log
+└── PostUpdateRunner → --post-update 시 스모크 테스트
+    ├── CPU AUTO 모드, 스레드 절반, 30초
+    ├── QTimer::singleShot 500ms 폴링
+    └── 완료 시 LogUploader로 결과 전송 (trigger="post_update")
+```
+
+**CMake 의존성:** `occt_updater → Qt6::Core Qt6::Widgets Qt6::Network occt_utils occt_report occt_engines`
 
 ## 파일 수정 시 체크리스트
 

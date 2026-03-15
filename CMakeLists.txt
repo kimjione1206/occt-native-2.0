@@ -105,7 +105,7 @@ endif()
 
 # ─── 의존성 찾기 ─────────────────────────────────────────────────────────────
 # Qt6 (필수)
-find_package(Qt6 REQUIRED COMPONENTS Widgets Charts Core Gui)
+find_package(Qt6 REQUIRED COMPONENTS Widgets Charts Core Gui Network)
 message(STATUS "Qt6 found: ${Qt6_VERSION}")
 
 # OpenCL (선택적)
@@ -154,6 +154,7 @@ add_subdirectory(src/report)
 add_subdirectory(src/api)
 add_subdirectory(src/benchmark)
 add_subdirectory(src/cli)
+add_subdirectory(src/updater)
 
 # ─── 테스트 ───────────────────────────────────────────────────────────────
 option(BUILD_TESTS "Build test executables" ON)
@@ -196,9 +197,11 @@ target_link_libraries(occt_native PRIVATE
     Qt6::Charts
     Qt6::Core
     Qt6::Gui
+    Qt6::Network
     occt_gui
     occt_safety
     occt_cli
+    occt_updater
 )
 
 if(OCCT_HAS_OPENCL)

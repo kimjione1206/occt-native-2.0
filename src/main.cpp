@@ -14,6 +14,8 @@
 #include "utils/portable_paths.h"
 #include "utils/file_logger.h"
 #include "utils/app_config.h"
+#include "updater/post_update_runner.h"
+#include "updater/update_checker.h"
 
 // Check for a specific flag early before creating any Qt application object.
 static bool has_flag(int argc, char* argv[], const char* flag)
@@ -91,6 +93,23 @@ static int run_gui(int argc, char* argv[])
         mainWindow.restoreState(savedState);
     }
     mainWindow.show();
+
+    // Post-update: run smoke test automatically after update
+    if (has_flag(argc, argv, "--post-update")) {
+        qInfo() << "Post-update mode: running smoke test...";
+        QTimer::singleShot(2000, [&mainWindow]() {
+            auto* runner = new occt::updater::PostUpdateRunner(&mainWindow);
+            QObject::connect(runner, &occt::updater::PostUpdateRunner::testComplete,
+                [](bool passed, const QString& summary) {
+                    qInfo() << "Post-update smoke test:" << (passed ? "PASS" : "FAIL") << summary;
+                });
+            QObject::connect(runner, &occt::updater::PostUpdateRunner::uploadComplete,
+                [](const QString& gistUrl) {
+                    qInfo() << "Test results uploaded:" << gistUrl;
+                });
+            runner->run();
+        });
+    }
 
     QObject::connect(&app, &QApplication::aboutToQuit, [&]() {
         config.setWindowGeometry(mainWindow.saveGeometry());

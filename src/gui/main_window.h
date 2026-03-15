@@ -19,6 +19,7 @@
 #include <memory>
 
 namespace occt { class SensorManager; class SafetyGuardian; }
+namespace occt { namespace updater { class UpdateChecker; class LogUploader; struct UpdateInfo; } }
 
 namespace occt { namespace gui {
 
@@ -37,6 +38,8 @@ private slots:
     void onExportReport();
     void onExit();
     void onAbout();
+    void onUpdateAvailable(const updater::UpdateInfo& info);
+    void onTestStopped(const QString& engineName);
 
 private:
     void setupUi();
@@ -78,6 +81,10 @@ private:
 
     // Sound alerts
     bool soundAlertsEnabled_ = true;
+
+    // Update checker
+    updater::UpdateChecker* updateChecker_ = nullptr;
+    updater::LogUploader* logUploader_ = nullptr;
 };
 
 }} // namespace occt::gui

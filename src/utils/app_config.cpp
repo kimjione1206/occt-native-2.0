@@ -52,6 +52,37 @@ void AppConfig::setLastRamSettings(const QVariantMap& s)   { writeGroup("LastRam
 QVariantMap AppConfig::lastStorageSettings() const { return readGroup("LastStorageSettings"); }
 void AppConfig::setLastStorageSettings(const QVariantMap& s) { writeGroup("LastStorageSettings", s); }
 
+// Update settings
+QString AppConfig::gistToken() const
+{
+    return settings_->value("Update/gistToken").toString();
+}
+
+void AppConfig::setGistToken(const QString& token)
+{
+    settings_->setValue("Update/gistToken", token);
+}
+
+QString AppConfig::lastUpdateCheck() const
+{
+    return settings_->value("Update/lastCheck").toString();
+}
+
+void AppConfig::setLastUpdateCheck(const QString& timestamp)
+{
+    settings_->setValue("Update/lastCheck", timestamp);
+}
+
+QString AppConfig::updateSkippedVersion() const
+{
+    return settings_->value("Update/skippedVersion").toString();
+}
+
+void AppConfig::setUpdateSkippedVersion(const QString& version)
+{
+    settings_->setValue("Update/skippedVersion", version);
+}
+
 // Generic
 QVariant AppConfig::value(const QString& key, const QVariant& defaultValue) const
 {

@@ -143,6 +143,8 @@ CliOptions parse_args(int argc, char** argv)
             }
         } else if (std::strcmp(arg, "--direct-io") == 0) {
             opts.direct_io = true;
+        } else if (std::strcmp(arg, "--post-update") == 0) {
+            opts.post_update = true;
         } else if (std::strcmp(arg, "--cpu-temp-limit") == 0 && i + 1 < argc) {
             parse_int("--cpu-temp-limit", argv[++i], opts.cpu_temp_limit, 50, 120);
         } else if (std::strcmp(arg, "--gpu-temp-limit") == 0 && i + 1 < argc) {

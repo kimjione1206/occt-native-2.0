@@ -111,14 +111,37 @@ jobs:
           if-no-files-found: error
           retention-days: 90
 
+      # ── Generate latest.json for auto-updater ─────────────────────────────
+      - name: Generate latest.json
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        run: |
+          $version = "${{ github.ref_name }}".TrimStart('v')
+          $zipFile = Get-ChildItem dist/*.zip | Select-Object -First 1
+          $sha256 = (Get-Content dist/*.sha256 -Raw).Trim().Split(' ')[0]
+          $downloadUrl = "https://github.com/kimjione1206/occt-native-2.0/releases/download/${{ github.ref_name }}/$($zipFile.Name)"
+          @{
+            version = $version
+            download_url = $downloadUrl
+            sha256 = $sha256
+            release_date = (Get-Date -Format "yyyy-MM-ddTHH:mm:ssZ")
+          } | ConvertTo-Json | Set-Content dist/latest.json
+
       # ── Create GitHub Release on tag push ────────────────────────────────
       - name: Create Release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
+          name: "${{ github.ref_name }} (Internal Build - Not for public use)"
           files: |
             dist/*.zip
             dist/*.sha256
+            dist/latest.json
+          body: |
+            ⚠️ **Internal Development Build** - This is NOT an official OCCT release.
+            This project is not affiliated with OCCT. For personal/internal testing only.
+
+            ---
           generate_release_notes: true
           draft: false
           prerelease: ${{ contains(github.ref, '-rc') || contains(github.ref, '-beta') || contains(github.ref, '-alpha') }}

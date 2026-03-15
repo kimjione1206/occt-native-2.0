@@ -277,6 +277,7 @@ void PsuPanel::updateMonitoring()
             startStopBtn_->setText("테스트 시작");
             startStopBtn_->setStyleSheet(styles::kStartButtonOrange);
             monitorTimer_->stop();
+            emit testStopRequested();
         }
         return;
     }

@@ -418,6 +418,7 @@ void CpuPanel::updateMonitoring()
             statusLabel_->setText("대기");
             statusLabel_->setStyleSheet(styles::kStatusIdle);
             monitorTimer_->stop();
+            emit testStopRequested();
         }
         return;
     }

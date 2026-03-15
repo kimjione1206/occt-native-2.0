@@ -14,6 +14,10 @@
 #cmakedefine OCCT_HAS_OPENCL
 #cmakedefine OCCT_HAS_VULKAN
 
+// ─── 업데이트 설정 ──────────────────────────────────────────────────────────
+#define OCCT_GITHUB_REPO "kimjione1206/occt-native-2.0"
+#define OCCT_UPDATE_CHECK_URL "https://api.github.com/repos/kimjione1206/occt-native-2.0/releases/latest"
+
 // ─── 플랫폼 감지 ────────────────────────────────────────────────────────────
 #if defined(_WIN32) || defined(_WIN64)
     #define OCCT_PLATFORM_WINDOWS 1

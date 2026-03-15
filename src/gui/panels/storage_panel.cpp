@@ -308,6 +308,7 @@ void StoragePanel::updateMonitoring()
             startStopBtn_->setText("테스트 시작");
             startStopBtn_->setStyleSheet(styles::kStartButton);
             monitorTimer_->stop();
+            emit testStopRequested();
         }
         return;
     }

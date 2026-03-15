@@ -13,6 +13,11 @@
 #include "panels/certificate_panel.h"
 #include "../monitor/sensor_manager.h"
 #include "../safety/guardian.h"
+#include "../updater/update_checker.h"
+#include "../updater/update_dialog.h"
+#include "../updater/update_downloader.h"
+#include "../updater/update_installer.h"
+#include "../updater/log_uploader.h"
 
 #include <QApplication>
 #include <QFile>
@@ -23,6 +28,9 @@
 #include <QShortcut>
 #include <QCloseEvent>
 #include <QStyle>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QHostInfo>
 
 #if defined(_WIN32)
     #define WIN32_LEAN_AND_MEAN
@@ -52,6 +60,15 @@ MainWindow::MainWindow(QWidget* parent)
 
     setupTrayIcon();
     setupShortcuts();
+
+    // Auto-update checker: check 30 seconds after startup, then every 4 hours
+    updateChecker_ = new updater::UpdateChecker(this);
+    connect(updateChecker_, &updater::UpdateChecker::updateAvailable,
+            this, &MainWindow::onUpdateAvailable);
+    QTimer::singleShot(30000, updateChecker_, &updater::UpdateChecker::checkForUpdate);
+
+    // Log uploader for manual test stop (trigger B)
+    logUploader_ = new updater::LogUploader(this);
 }
 
 MainWindow::~MainWindow()
@@ -284,6 +301,13 @@ void MainWindow::createPanels()
     connect(dashboardPanel, &DashboardPanel::startFullTest, this, [this]() {
         setActiveTab("cpu");
     });
+
+    // Connect testStopRequested from all panels for log upload (trigger B)
+    connect(cpuPanel, &CpuPanel::testStopRequested, this, [this]() { onTestStopped("cpu"); });
+    connect(gpuPanel, &GpuPanel::testStopRequested, this, [this]() { onTestStopped("gpu"); });
+    connect(ramPanel, &RamPanel::testStopRequested, this, [this]() { onTestStopped("ram"); });
+    connect(storagePanel, &StoragePanel::testStopRequested, this, [this]() { onTestStopped("storage"); });
+    connect(psuPanel, &PsuPanel::testStopRequested, this, [this]() { onTestStopped("psu"); });
 }
 
 void MainWindow::createStatusBarWidgets()
@@ -550,6 +574,96 @@ void MainWindow::stopAllTests()
 
     statusLabel_->setText("모든 테스트 중지됨 (긴급 중지)");
     playTestErrorSound();
+    onTestStopped("all");
+}
+
+// ─── Update & Log Upload ─────────────────────────────────────────────────────
+
+void MainWindow::onUpdateAvailable(const updater::UpdateInfo& info)
+{
+    auto* dialog = new updater::UpdateDialog(info, this);
+
+    connect(dialog, &updater::UpdateDialog::updateAccepted, this, [this, info, dialog]() {
+        dialog->showProgress();
+
+        auto* downloader = new updater::UpdateDownloader(this);
+
+        connect(downloader, &updater::UpdateDownloader::progressChanged, dialog,
+            &updater::UpdateDialog::setProgress);
+        connect(downloader, &updater::UpdateDownloader::speedChanged, dialog,
+            &updater::UpdateDialog::setSpeed);
+
+        connect(downloader, &updater::UpdateDownloader::downloadComplete, this,
+            [this, dialog](const QString& zipPath) {
+                dialog->setStage("설치 준비 중...");
+                dialog->startCountdown();
+
+                connect(dialog, &updater::UpdateDialog::countdownFinished, this,
+                    [zipPath]() {
+                        updater::UpdateInstaller installer;
+                        installer.install(zipPath);
+                    });
+            });
+
+        connect(downloader, &updater::UpdateDownloader::downloadFailed, this,
+            [dialog](const QString& error) {
+                dialog->setStage("다운로드 실패: " + error);
+            });
+
+        connect(downloader, &updater::UpdateDownloader::verificationFailed, this,
+            [dialog]() {
+                dialog->setStage("파일 검증 실패 - 다시 시도해주세요");
+            });
+
+        downloader->download(info);
+    });
+
+    dialog->show();
+}
+
+void MainWindow::onTestStopped(const QString& engineName)
+{
+    if (!logUploader_ || !logUploader_->hasToken()) return;
+
+    // Collect basic test result info
+    QJsonObject testResults;
+    testResults["engine"] = engineName;
+    testResults["timestamp"] = QDateTime::currentDateTime().toString(Qt::ISODate);
+    testResults["app_version"] = OCCT_VERSION_STRING;
+
+    // Collect metrics from the stopped engine
+    for (auto it = panels_.begin(); it != panels_.end(); ++it) {
+        const QString& key = it.key();
+        if (engineName != "all" && key != engineName) continue;
+
+        if (key == "cpu") {
+            if (auto* p = qobject_cast<CpuPanel*>(it.value())) {
+                if (p->engine()) {
+                    auto m = p->engine()->get_metrics();
+                    QJsonObject cpu;
+                    cpu["gflops"] = m.gflops;
+                    cpu["error_count"] = m.error_count;
+                    cpu["elapsed_sec"] = m.elapsed_sec;
+                    testResults["cpu"] = cpu;
+                }
+            }
+        }
+        // Additional engines can be added similarly
+    }
+
+    QString resultsJson = QJsonDocument(testResults).toJson(QJsonDocument::Compact);
+    QJsonObject sysInfo;
+    sysInfo["hostname"] = QHostInfo::localHostName();
+    QString sysInfoJson = QJsonDocument(sysInfo).toJson(QJsonDocument::Compact);
+
+    logUploader_->upload(resultsJson, sysInfoJson, QString(), "manual_stop");
+    statusLabel_->setText("테스트 로그 전송 중...");
+
+    connect(logUploader_, &updater::LogUploader::uploadComplete, this,
+        [this](const QString& url) {
+            statusLabel_->setText("로그 전송 완료");
+            qInfo() << "Test log uploaded:" << url;
+        }, Qt::UniqueConnection);
 }
 
 // ─── Sound Alerts ────────────────────────────────────────────────────────────

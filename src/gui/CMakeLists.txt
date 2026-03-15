@@ -47,8 +47,10 @@ target_link_libraries(occt_gui PUBLIC
     Qt6::Widgets
     Qt6::Core
     Qt6::Gui
+    Qt6::Network
     occt_monitor
     occt_scheduler
     occt_certification
     occt_report
+    occt_updater
 )
