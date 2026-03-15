@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.21)
 
 # ─── 프로젝트 정의 ───────────────────────────────────────────────────────────
 set(OCCT_VERSION_MAJOR 1)
-set(OCCT_VERSION_MINOR 4)
+set(OCCT_VERSION_MINOR 5)
 set(OCCT_VERSION_PATCH 0)
 set(OCCT_VERSION_STRING "${OCCT_VERSION_MAJOR}.${OCCT_VERSION_MINOR}.${OCCT_VERSION_PATCH}")
 

@@ -22,6 +22,8 @@ namespace occt {
 struct LhmBridge::Impl {
     QString helper_path;
     QString log_file_;
+    QProcess* process = nullptr;       // persistent helper process
+    bool process_running = false;
 
     void log(const std::string& msg) {
         if (log_file_.isEmpty()) {
@@ -55,45 +57,69 @@ struct LhmBridge::Impl {
         return false;
     }
 
-    static constexpr int kFirstPollTimeoutMs = 15000;
-    static constexpr int kNormalTimeoutMs    = 10000;
+    bool start_helper(QObject* parent) {
+        if (process) {
+            stop_helper();
+        }
 
-    bool poll_helper(std::vector<SensorReading>& out, bool first_poll) {
-        if (helper_path.isEmpty()) return false;
+        process = new QProcess(parent);
+        process->setProgram(helper_path);
+        process->setArguments({"--loop", "2000"});
+        process->start();
 
-        const int timeout_ms = first_poll ? kFirstPollTimeoutMs : kNormalTimeoutMs;
-
-        QProcess proc;
-        proc.setProgram(helper_path);
-        proc.setArguments({"--json", "--once"});
-        proc.start();
-
-        if (!proc.waitForFinished(timeout_ms)) {
-            log("[LHM] Helper timed out after " + std::to_string(timeout_ms / 1000) + "s");
-            proc.kill();
+        if (!process->waitForStarted(5000)) {
+            log("[LHM] Failed to start persistent helper");
+            delete process;
+            process = nullptr;
+            process_running = false;
             return false;
         }
 
-        QByteArray data = proc.readAllStandardOutput();
-        QByteArray errData = proc.readAllStandardError();
-        int exitCode = proc.exitCode();
+        process_running = true;
+        log("[LHM] Started persistent helper (PID: "
+            + std::to_string(process->processId()) + ")");
 
-        if (exitCode != 0) {
-            log("[LHM] Helper exit code: " + std::to_string(exitCode));
-            if (!errData.isEmpty()) {
-                log("[LHM] Helper stderr: " + errData.toStdString());
-            }
-            log("[LHM] Helper stdout (first 500 chars): " + data.left(500).toStdString());
+        // Wait for first line of output (LHM initialization takes time)
+        if (!process->waitForReadyRead(15000)) {
+            log("[LHM] Helper started but no data within 15s, continuing anyway");
+        }
+
+        return true;
+    }
+
+    void stop_helper() {
+        if (!process) return;
+
+        log("[LHM] Stopping persistent helper");
+        process->terminate();
+        if (!process->waitForFinished(3000)) {
+            process->kill();
+            process->waitForFinished(1000);
+        }
+        delete process;
+        process = nullptr;
+        process_running = false;
+    }
+
+    bool read_latest(std::vector<SensorReading>& out) {
+        if (!process || process->state() == QProcess::NotRunning) {
+            process_running = false;
             return false;
         }
 
-        if (data.isEmpty()) {
-            log("[LHM] Helper returned empty output");
+        // Read all available complete lines, keep only the last one (most recent data)
+        QByteArray lastLine;
+        while (process->canReadLine()) {
+            lastLine = process->readLine().trimmed();
+        }
+
+        if (lastLine.isEmpty()) {
             return false;
         }
 
+        // Parse JSON
         QJsonParseError err;
-        QJsonDocument doc = QJsonDocument::fromJson(data, &err);
+        QJsonDocument doc = QJsonDocument::fromJson(lastLine, &err);
         if (err.error != QJsonParseError::NoError) {
             log("[LHM] JSON parse error: " + err.errorString().toStdString()
                 + " at offset " + std::to_string(err.offset));
@@ -135,15 +161,29 @@ struct LhmBridge::Impl {
 LhmBridge::LhmBridge(QObject* parent)
     : QObject(parent), impl_(std::make_unique<Impl>()) {}
 
-LhmBridge::~LhmBridge() = default;
+LhmBridge::~LhmBridge() {
+    if (impl_) {
+        impl_->stop_helper();
+    }
+}
 
 bool LhmBridge::initialize() {
-    available_ = impl_->find_helper();
-    if (available_) {
-        impl_->log("[LHM] Found helper at: " + impl_->helper_path.toStdString());
-    } else {
+    if (!impl_->find_helper()) {
         impl_->log("[LHM] Helper not found, using WMI fallback");
+        available_ = false;
+        return false;
     }
+
+    impl_->log("[LHM] Found helper at: " + impl_->helper_path.toStdString());
+
+    // Start the persistent helper process
+    if (impl_->start_helper(this)) {
+        available_ = true;
+    } else {
+        impl_->log("[LHM] Failed to start persistent helper, using WMI fallback");
+        available_ = false;
+    }
+
     return available_;
 }
 
@@ -159,12 +199,40 @@ void LhmBridge::poll(std::vector<SensorReading>& out) {
         }
         impl_->log("[LHM] Recovery: retrying after " + std::to_string(retry_interval_secs_)
                     + "s backoff (fail_count: " + std::to_string(fail_count_) + ")");
-        available_ = true; // Temporarily re-enable for this attempt
+
+        // Try to restart the helper process
+        if (impl_->start_helper(this)) {
+            available_ = true;
+        } else {
+            // Restart failed, update backoff and wait longer
+            fail_count_++;
+            last_fail_time_ = std::chrono::steady_clock::now();
+            retry_interval_secs_ = compute_retry_interval();
+            impl_->log("[LHM] Restart failed, next retry in " + std::to_string(retry_interval_secs_) + "s");
+            return;
+        }
     }
 
     if (!available_) return;
 
-    if (!impl_->poll_helper(out, first_poll_)) {
+    // If helper process died, try to restart it
+    if (!impl_->process || impl_->process->state() == QProcess::NotRunning) {
+        impl_->log("[LHM] Helper crashed, restarting...");
+        if (!impl_->start_helper(this)) {
+            fail_count_++;
+            last_fail_time_ = std::chrono::steady_clock::now();
+            retry_interval_secs_ = compute_retry_interval();
+            if (fail_count_ >= 5) {
+                available_ = false;
+                impl_->log("[LHM] Restart failed (fail_count: " + std::to_string(fail_count_)
+                            + "), next retry in " + std::to_string(retry_interval_secs_) + "s");
+            }
+            return;
+        }
+    }
+
+    // Read latest data from persistent process stdout
+    if (!impl_->read_latest(out)) {
         fail_count_++;
         last_fail_time_ = std::chrono::steady_clock::now();
         retry_interval_secs_ = compute_retry_interval();

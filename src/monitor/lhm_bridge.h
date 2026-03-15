@@ -14,9 +14,10 @@ namespace occt {
 
 /// Bridge to LibreHardwareMonitor on Windows.
 ///
-/// Strategy: launch an external "lhm-sensor-reader" helper process that
-/// outputs JSON on stdout each polling cycle.  Falls back to WMI if the
-/// helper is not found.
+/// Strategy: launch an external "lhm-sensor-reader" helper process in
+/// persistent (--loop) mode.  The helper stays resident and emits one JSON
+/// line per polling interval on stdout.  poll() reads the latest available
+/// line instead of spawning a new process each time.
 ///
 /// On non-Windows platforms this is a no-op stub.
 class LhmBridge : public QObject {
@@ -27,7 +28,7 @@ public:
     ~LhmBridge() override;
 
     /// Try to locate and start the LHM helper.  Returns true if the bridge
-    /// is active (helper found or COM interop succeeded).
+    /// is active (helper found and started successfully).
     bool initialize();
 
     /// Returns true if the bridge is providing data.

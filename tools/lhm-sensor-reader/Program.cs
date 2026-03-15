@@ -16,6 +16,8 @@ internal partial class AppJsonContext : JsonSerializerContext { }
 
 public class Program
 {
+    private const int DefaultLoopMs = 2000;
+
     public static int Main(string[] args)
     {
         bool once = false;
@@ -31,10 +33,14 @@ public class Program
                     once = true;
                     break;
                 case "--loop":
-                    if (i + 1 < args.Length && int.TryParse(args[i + 1], out int ms))
+                    if (i + 1 < args.Length && int.TryParse(args[i + 1], out int ms) && ms > 0)
                     {
                         loopMs = ms;
                         i++;
+                    }
+                    else
+                    {
+                        loopMs = DefaultLoopMs;
                     }
                     break;
             }
@@ -83,7 +89,7 @@ public class Program
                 return 0;
             }
 
-            // Loop mode
+            // Loop mode — resident process, initialize once, poll repeatedly
             using var cts = new CancellationTokenSource();
             Console.CancelKeyPress += (_, e) =>
             {
@@ -91,10 +97,27 @@ public class Program
                 cts.Cancel();
             };
 
+            // Monitor stdin on a background thread: when the parent process
+            // exits or closes our stdin pipe, cancel the loop so we exit cleanly.
+            var stdinMonitor = Task.Run(() =>
+            {
+                try
+                {
+                    // ReadLine blocks until a line arrives or the stream closes.
+                    // We don't expect any input — we only care about EOF (null).
+                    while (Console.In.ReadLine() != null) { }
+                }
+                catch { /* stream error = parent gone */ }
+                cts.Cancel();
+            });
+
+            var visitor = new UpdateVisitor();
+
             while (!cts.Token.IsCancellationRequested)
             {
                 try
                 {
+                    computer.Accept(visitor);
                     var output = CollectSensorData(computer);
                     var json = JsonSerializer.Serialize(output, AppJsonContext.Default.SensorOutput);
                     Console.WriteLine(json);
@@ -102,13 +125,21 @@ public class Program
                 }
                 catch (IOException)
                 {
+                    // stdout pipe broken — parent is gone
                     break;
                 }
                 catch (Exception ex)
                 {
                     var error = new ErrorOutput { Error = "collect_failed", Message = ex.Message };
-                    Console.WriteLine(JsonSerializer.Serialize(error, AppJsonContext.Default.ErrorOutput));
-                    Console.Out.Flush();
+                    try
+                    {
+                        Console.WriteLine(JsonSerializer.Serialize(error, AppJsonContext.Default.ErrorOutput));
+                        Console.Out.Flush();
+                    }
+                    catch (IOException)
+                    {
+                        break;
+                    }
                 }
 
                 try
@@ -260,4 +291,26 @@ public class ErrorOutput
 
     [JsonPropertyName("message")]
     public string Message { get; set; } = "";
+}
+
+/// <summary>
+/// Visitor that calls Update() on every hardware and sub-hardware node.
+/// Used by computer.Accept(visitor) to refresh all sensor readings in one pass.
+/// </summary>
+internal class UpdateVisitor : IVisitor
+{
+    public void VisitComputer(IComputer computer)
+    {
+        computer.Traverse(this);
+    }
+
+    public void VisitHardware(IHardware hardware)
+    {
+        hardware.Update();
+        foreach (var sub in hardware.SubHardware)
+            sub.Accept(this);
+    }
+
+    public void VisitSensor(ISensor sensor) { }
+    public void VisitParameter(IParameter parameter) { }
 }
