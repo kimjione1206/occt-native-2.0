@@ -94,6 +94,20 @@ MainWindow::MainWindow(QWidget* parent)
 
     // Log uploader for manual test stop (trigger B)
     logUploader_ = new updater::LogUploader(this);
+
+    // Sensor history: record every 5 seconds during tests
+    sensorHistoryTimer_ = new QTimer(this);
+    sensorHistoryTimer_->setInterval(5000);
+    connect(sensorHistoryTimer_, &QTimer::timeout, this, [this]() {
+        if (!sensorMgr_ || !sensorRecording_) return;
+        QJsonObject snapshot;
+        snapshot["time"] = QDateTime::currentDateTime().toString("hh:mm:ss");
+        snapshot["cpu_temp"] = sensorMgr_->get_cpu_temperature();
+        snapshot["gpu_temp"] = sensorMgr_->get_gpu_temperature();
+        snapshot["cpu_power"] = sensorMgr_->get_cpu_power();
+        snapshot["cpu_power_estimated"] = sensorMgr_->is_cpu_power_estimated();
+        sensorHistory_.append(snapshot);
+    });
 }
 
 MainWindow::~MainWindow()
@@ -327,7 +341,19 @@ void MainWindow::createPanels()
         setActiveTab("cpu");
     });
 
-    // Connect testStopRequested from all panels for log upload (trigger B)
+    // Connect testStartRequested → start sensor recording
+    auto startRecording = [this]() {
+        sensorHistory_ = QJsonArray();
+        sensorRecording_ = true;
+        sensorHistoryTimer_->start();
+    };
+    connect(cpuPanel, &CpuPanel::testStartRequested, this, startRecording);
+    connect(gpuPanel, &GpuPanel::testStartRequested, this, startRecording);
+    connect(ramPanel, &RamPanel::testStartRequested, this, startRecording);
+    connect(storagePanel, &StoragePanel::testStartRequested, this, startRecording);
+    connect(psuPanel, &PsuPanel::testStartRequested, this, startRecording);
+
+    // Connect testStopRequested → stop recording + log upload (trigger B)
     connect(cpuPanel, &CpuPanel::testStopRequested, this, [this]() { onTestStopped("cpu"); });
     connect(gpuPanel, &GpuPanel::testStopRequested, this, [this]() { onTestStopped("gpu"); });
     connect(ramPanel, &RamPanel::testStopRequested, this, [this]() { onTestStopped("ram"); });
@@ -666,6 +692,10 @@ void MainWindow::onUpdateAvailable(const updater::UpdateInfo& info)
 
 void MainWindow::onTestStopped(const QString& engineName)
 {
+    // Stop sensor recording
+    sensorRecording_ = false;
+    sensorHistoryTimer_->stop();
+
     if (!logUploader_ || !logUploader_->hasToken()) return;
 
     QJsonObject testResults;
@@ -785,6 +815,11 @@ void MainWindow::onTestStopped(const QString& engineName)
             allReadings.append(reading);
         }
         sensors["all_readings"] = allReadings;
+
+        // Sensor history timeline (5s intervals during test)
+        sensors["history"] = sensorHistory_;
+        sensors["history_count"] = sensorHistory_.size();
+
         testResults["sensors"] = sensors;
     }
 

@@ -11,6 +11,8 @@
 #include <QMap>
 #include <QTimer>
 #include <QMenuBar>
+#include <QJsonArray>
+#include <QJsonObject>
 #include <QMenu>
 #include <QAction>
 #include <QSystemTrayIcon>
@@ -88,6 +90,11 @@ private:
     updater::UpdateChecker* updateChecker_ = nullptr;
     updater::LogUploader* logUploader_ = nullptr;
     bool manualUpdateCheck_ = false;
+
+    // Sensor history (5s interval, recorded during tests)
+    QTimer* sensorHistoryTimer_ = nullptr;
+    QJsonArray sensorHistory_;
+    bool sensorRecording_ = false;
 };
 
 }} // namespace occt::gui
