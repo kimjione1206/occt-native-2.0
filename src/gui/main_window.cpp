@@ -111,11 +111,26 @@ MainWindow::MainWindow(QWidget* parent)
     connect(sensorHistoryTimer_, &QTimer::timeout, this, [this]() {
         if (!sensorMgr_ || !sensorRecording_) return;
         QJsonObject snapshot;
-        snapshot["time"] = QDateTime::currentDateTime().toString("hh:mm:ss");
+        snapshot["time"] = QDateTime::currentDateTime().toString("hh:mm:ss.zzz");
         snapshot["cpu_temp"] = sensorMgr_->get_cpu_temperature();
         snapshot["gpu_temp"] = sensorMgr_->get_gpu_temperature();
         snapshot["cpu_power"] = sensorMgr_->get_cpu_power();
         snapshot["cpu_power_estimated"] = sensorMgr_->is_cpu_power_estimated();
+
+        // Data source diagnostics
+        auto readings = sensorMgr_->get_all_readings();
+        bool has_lhm_data = false;
+        bool has_wmi_data = false;
+        for (const auto& r : readings) {
+            if (r.category == "CPU" && r.unit == "W" && r.name.find("Package") != std::string::npos)
+                has_lhm_data = true;
+            if (r.category == "CPU" && r.unit == "%" && r.name.find("CPU Usage") != std::string::npos)
+                has_wmi_data = true;
+        }
+        snapshot["source_lhm"] = has_lhm_data;
+        snapshot["source_wmi"] = has_wmi_data;
+        snapshot["reading_count"] = static_cast<int>(readings.size());
+
         sensorHistory_.append(snapshot);
     });
 }

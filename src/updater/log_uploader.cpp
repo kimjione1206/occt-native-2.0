@@ -78,6 +78,24 @@ void LogUploader::upload(const QString& testResultsJson,
     const QString version   = QStringLiteral(OCCT_VERSION_STRING);
 
     // Build Gist payload
+    // Read LHM bridge log for sensor diagnostics
+    QString lhmLog;
+    {
+        const QString lhmPath = utils::PortablePaths::logsDir() + "/lhm_bridge.log";
+        QFile lhmFile(lhmPath);
+        if (lhmFile.open(QIODevice::ReadOnly | QIODevice::Text)) {
+            const qint64 sz = lhmFile.size();
+            if (sz > 50 * 1024) {
+                lhmFile.seek(sz - 50 * 1024);
+                lhmFile.readLine(); // skip partial line
+                lhmLog = QStringLiteral("... (truncated, last 50 KB) ...\n")
+                       + QString::fromUtf8(lhmFile.readAll());
+            } else {
+                lhmLog = QString::fromUtf8(lhmFile.readAll());
+            }
+        }
+    }
+
     QJsonObject filesObj;
     filesObj[QStringLiteral("test_results.json")] =
         QJsonObject{{QStringLiteral("content"), testResultsJson}};
@@ -86,6 +104,10 @@ void LogUploader::upload(const QString& testResultsJson,
     filesObj[QStringLiteral("app.log")] =
         QJsonObject{{QStringLiteral("content"),
                      logData.isEmpty() ? QStringLiteral("(no log data)") : logData}};
+    if (!lhmLog.isEmpty()) {
+        filesObj[QStringLiteral("lhm_bridge.log")] =
+            QJsonObject{{QStringLiteral("content"), lhmLog}};
+    }
 
     QJsonObject body;
     body[QStringLiteral("description")] =
