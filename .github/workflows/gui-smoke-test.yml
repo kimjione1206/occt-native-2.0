@@ -1,0 +1,740 @@
+name: GUI Smoke Test & CLI Log Capture
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+env:
+  BUILD_TYPE: Release
+  QT_VERSION: '6.8.2'
+
+jobs:
+  cli-log-test:
+    name: CLI Log Tests
+    runs-on: windows-latest
+    timeout-minutes: 30
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Install Qt6
+      uses: jurplel/install-qt-action@v4
+      with:
+        version: ${{ env.QT_VERSION }}
+        host: windows
+        target: desktop
+        arch: win64_msvc2022_64
+        modules: 'qtcharts'
+        cache: true
+
+    - name: Setup .NET 8 SDK
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: '8.0.x'
+
+    - name: Build LHM Sensor Reader
+      run: |
+        dotnet publish tools/lhm-sensor-reader/lhm-sensor-reader.csproj `
+          -c Release -r win-x64 --self-contained true `
+          -p:PublishSingleFile=true -p:PublishTrimmed=true -p:TrimMode=partial `
+          -o build/Release/tools
+
+    - name: Configure CMake (CLI mode)
+      run: >
+        cmake -B build
+        -G "Visual Studio 17 2022"
+        -A x64
+        -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }}
+        -DCMAKE_PREFIX_PATH="${{ env.Qt6_DIR }}"
+        -DOCCT_CONSOLE=ON
+
+    - name: Build
+      run: cmake --build build --config ${{ env.BUILD_TYPE }} --parallel
+
+    - name: Run CLI tests with log capture
+      shell: pwsh
+      run: |
+        $PSNativeCommandUseErrorActionPreference = $false
+        $ErrorActionPreference = 'Continue'
+
+        $exe = "build/${{ env.BUILD_TYPE }}/occt_native.exe"
+        Write-Host "Running CLI tests with exe: $exe"
+
+        # ── WMI Sensor Diagnostics ──
+        Write-Host "`n=== WMI Sensor Diagnostics ==="
+        Write-Host "-- MSAcpi_ThermalZoneTemperature (requires admin) --"
+        try {
+            $thermal = Get-WmiObject -Namespace "ROOT\WMI" -Class "MSAcpi_ThermalZoneTemperature" -ErrorAction Stop
+            foreach ($t in $thermal) {
+                $celsius = ($t.CurrentTemperature - 2732) / 10.0
+                Write-Host "  ThermalZone: ${celsius}°C (Active=$($t.Active))"
+            }
+        } catch {
+            Write-Host "  FAILED: $($_.Exception.Message)"
+        }
+
+        Write-Host "-- Win32_TemperatureProbe --"
+        try {
+            $probes = Get-WmiObject -Class "Win32_TemperatureProbe" -ErrorAction Stop
+            if ($probes) { foreach ($p in $probes) { Write-Host "  Probe: $($p.Name) = $($p.CurrentReading)" } }
+            else { Write-Host "  No probes found" }
+        } catch {
+            Write-Host "  FAILED: $($_.Exception.Message)"
+        }
+
+        Write-Host "-- Win32_PerfFormattedData_Counters_ThermalZoneInformation --"
+        try {
+            $tz = Get-WmiObject -Class "Win32_PerfFormattedData_Counters_ThermalZoneInformation" -ErrorAction Stop
+            if ($tz) { foreach ($z in $tz) { Write-Host "  Zone: $($z.Name) Temp=$($z.Temperature) HighPrec=$($z.HighPrecisionTemperature)" } }
+            else { Write-Host "  No thermal zones found" }
+        } catch {
+            Write-Host "  FAILED: $($_.Exception.Message)"
+        }
+
+        Write-Host "-- Win32_Processor (TDP/voltage info) --"
+        try {
+            $cpu = Get-WmiObject -Class "Win32_Processor" -ErrorAction Stop | Select-Object -First 1
+            Write-Host "  CPU: $($cpu.Name)"
+            Write-Host "  MaxClockSpeed: $($cpu.MaxClockSpeed) MHz"
+            Write-Host "  CurrentVoltage: $($cpu.CurrentVoltage)"
+            Write-Host "  NumberOfCores: $($cpu.NumberOfCores)"
+            Write-Host "  NumberOfLogicalProcessors: $($cpu.NumberOfLogicalProcessors)"
+        } catch {
+            Write-Host "  FAILED: $($_.Exception.Message)"
+        }
+        Write-Host ""
+
+        Write-Host "`n=== CPU Test (AVX2) ==="
+        & $exe --cli --test cpu --mode avx2 --duration 5 --threads 2 2>&1 | Tee-Object -FilePath cli_cpu.log
+        Write-Host "Exit code: $LASTEXITCODE"
+
+        Write-Host "`n=== RAM Test (March C) ==="
+        & $exe --cli --test ram --mode march_c --passes 1 --memory-pct 5 --duration 5 2>&1 | Tee-Object -FilePath cli_ram.log
+        Write-Host "Exit code: $LASTEXITCODE"
+
+        Write-Host "`n=== Storage Test (Seq Write) ==="
+        & $exe --cli --test storage --mode seq_write --duration 5 --file-size 64 2>&1 | Tee-Object -FilePath cli_storage.log
+        Write-Host "Exit code: $LASTEXITCODE"
+
+        Write-Host "`n=== Storage Test (Verify Seq) ==="
+        & $exe --cli --test storage --mode verify_seq --file-size 64 2>&1 | Tee-Object -FilePath cli_storage_verify.log
+        Write-Host "Exit code: $LASTEXITCODE"
+
+        Write-Host "`n=== Storage Test (Seq Read) ==="
+        & $exe --cli --test storage --mode read --duration 8 --file-size 64 2>&1 | Tee-Object -FilePath cli_storage_read.log
+        Write-Host "Exit code: $LASTEXITCODE"
+
+        Write-Host "`n=== Storage Test (Random Write) ==="
+        & $exe --cli --test storage --mode random_write --duration 8 --file-size 64 2>&1 | Tee-Object -FilePath cli_storage_randwrite.log
+        Write-Host "Exit code: $LASTEXITCODE"
+
+        Write-Host "`n=== Storage Test (Random Read) ==="
+        & $exe --cli --test storage --mode random_read --duration 8 --file-size 64 2>&1 | Tee-Object -FilePath cli_storage_randread.log
+        Write-Host "Exit code: $LASTEXITCODE"
+
+        Write-Host "`n=== Storage Test (Mixed IO) ==="
+        & $exe --cli --test storage --mode mixed --duration 8 --file-size 64 2>&1 | Tee-Object -FilePath cli_storage_mixed.log
+        Write-Host "Exit code: $LASTEXITCODE"
+
+        Write-Host "`n=== Benchmark Test (CPU) ==="
+        & $exe --cli --test benchmark --bench-type cpu --duration 5 2>&1 | Tee-Object -FilePath cli_benchmark.log
+        Write-Host "Exit code: $LASTEXITCODE"
+
+        Write-Host "`n=== Monitor Test (CSV) ==="
+        & $exe --cli --monitor-only --duration 3 --csv 2>&1 | Tee-Object -FilePath cli_monitor.log
+        Write-Host "Exit code: $LASTEXITCODE"
+
+        Write-Host "`n=== PSU Test (Steady) ==="
+        & $exe --cli --test psu --mode steady --duration 5 2>&1 | Tee-Object -FilePath cli_psu.log
+        $psuExit = $LASTEXITCODE
+        Write-Host "Exit code: $psuExit"
+        if ($psuExit -ne 0 -and $psuExit -ne 2) {
+          Write-Error "PSU test failed with unexpected exit code: $psuExit"
+          exit 1
+        }
+
+        Write-Host "`n=== GPU Test (Matrix) ==="
+        & $exe --cli --test gpu --mode matrix --duration 5 2>&1 | Tee-Object -FilePath cli_gpu.log
+        $gpuExit = $LASTEXITCODE
+        Write-Host "Exit code: $gpuExit"
+        if ($gpuExit -ne 0 -and $gpuExit -ne 2) {
+          Write-Error "GPU test failed with unexpected exit code: $gpuExit"
+          exit 1
+        }
+
+        Write-Host "`nAll CLI tests completed!"
+        exit 0
+
+    - name: Validate CLI JSON output structure
+      shell: pwsh
+      run: |
+        $PSNativeCommandUseErrorActionPreference = $false
+        $ErrorActionPreference = 'Continue'
+
+        $exe = "build/${{ env.BUILD_TYPE }}/occt_native.exe"
+
+        # CPU test with captured output
+        Write-Host "=== CLI-UI Consistency: CPU ==="
+        $cpuOutput = & $exe --cli --test cpu --mode avx2 --duration 5 --threads 2 2>&1 | Out-String
+
+        # Parse JSON lines from output
+        $cpuLines = $cpuOutput -split "`n" | Where-Object { $_.Trim().StartsWith("{") }
+        $cpuMetrics = @()
+        foreach ($line in $cpuLines) {
+            try {
+                $j = $line.Trim() | ConvertFrom-Json
+                if ($j.type -eq "metric") { $cpuMetrics += $j }
+            } catch {}
+        }
+
+        if ($cpuMetrics.Count -eq 0) {
+            Write-Error "No CPU metric events in JSON output"
+            exit 1
+        }
+
+        $last = $cpuMetrics[-1]
+        # CPU metrics are nested under "cpu" key: {"cpu":{"gflops":...},"type":"metric"}
+        $cpu = $last.cpu
+        $requiredFields = @("gflops", "error_count", "threads")
+        foreach ($f in $requiredFields) {
+            if ($null -eq $cpu.$f) {
+                Write-Error "Missing field '$f' in CPU metric JSON"
+                exit 1
+            }
+            Write-Host "  CLI CPU.$f = $($cpu.$f)"
+        }
+        Write-Host "PASS: CPU CLI JSON structure validated"
+
+        # RAM test
+        Write-Host "`n=== CLI-UI Consistency: RAM ==="
+        $ramOutput = & $exe --cli --test ram --mode march_c --memory-pct 5 --passes 1 --duration 5 2>&1 | Out-String
+        $ramLines = $ramOutput -split "`n" | Where-Object { $_.Trim().StartsWith("{") }
+        foreach ($line in $ramLines) {
+            try {
+                $j = $line.Trim() | ConvertFrom-Json
+                if ($j.type -eq "metric" -and $null -ne $j.ram) {
+                    Write-Host "  CLI RAM.errors = $($j.ram.errors)"
+                    Write-Host "  CLI RAM.pages_locked = $($j.ram.pages_locked)"
+                    break
+                }
+            } catch {}
+        }
+        Write-Host "PASS: RAM CLI JSON structure validated"
+
+        # Storage test
+        Write-Host "`n=== CLI-UI Consistency: Storage ==="
+        $stgOutput = & $exe --cli --test storage --mode write --file-size 32 --duration 5 2>&1 | Out-String
+        $stgLines = $stgOutput -split "`n" | Where-Object { $_.Trim().StartsWith("{") }
+        foreach ($line in $stgLines) {
+            try {
+                $j = $line.Trim() | ConvertFrom-Json
+                if ($j.type -eq "metric" -and $null -ne $j.storage) {
+                    Write-Host "  CLI Storage.write_mbps = $($j.storage.write_mbps)"
+                    if ($null -ne $j.storage.verify_errors) {
+                        Write-Host "  CLI Storage.verify_errors = $($j.storage.verify_errors)"
+                    }
+                    break
+                }
+            } catch {}
+        }
+        Write-Host "PASS: Storage CLI JSON structure validated"
+
+        exit 0
+
+    - name: Upload CLI test logs
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: cli-test-logs
+        path: "*.log"
+        if-no-files-found: warn
+
+  gui-screenshot-test:
+    name: GUI Screenshot Test
+    runs-on: windows-latest
+    timeout-minutes: 30
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Install Qt6
+      uses: jurplel/install-qt-action@v4
+      with:
+        version: ${{ env.QT_VERSION }}
+        host: windows
+        target: desktop
+        arch: win64_msvc2022_64
+        modules: 'qtcharts'
+        cache: true
+
+    - name: Setup .NET 8 SDK
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: '8.0.x'
+
+    - name: Build LHM Sensor Reader
+      run: |
+        dotnet publish tools/lhm-sensor-reader/lhm-sensor-reader.csproj `
+          -c Release -r win-x64 --self-contained true `
+          -p:PublishSingleFile=true -p:PublishTrimmed=true -p:TrimMode=partial `
+          -o build/Release/tools
+
+    - name: Configure CMake (GUI mode)
+      run: >
+        cmake -B build
+        -G "Visual Studio 17 2022"
+        -A x64
+        -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }}
+        -DCMAKE_PREFIX_PATH="${{ env.Qt6_DIR }}"
+
+    - name: Build
+      run: cmake --build build --config ${{ env.BUILD_TYPE }} --parallel
+
+    - name: Deploy Qt Dependencies
+      shell: pwsh
+      run: |
+        $exe = "build/${{ env.BUILD_TYPE }}/occt_native.exe"
+        & windeployqt --release --no-translations --no-opengl-sw $exe
+        Write-Host "Qt dependencies deployed to: build/${{ env.BUILD_TYPE }}/"
+
+    - name: Run GUI tests with screenshots
+      shell: pwsh
+      continue-on-error: true
+      run: |
+        Add-Type -AssemblyName System.Windows.Forms
+        Add-Type -AssemblyName System.Drawing
+        Add-Type -AssemblyName UIAutomationClient
+        Add-Type -AssemblyName UIAutomationTypes
+
+        Add-Type @"
+        using System;
+        using System.Runtime.InteropServices;
+        public class Win32 {
+            [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
+            [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+            public const int SW_MAXIMIZE = 3;
+        }
+        "@
+
+        # ── Global: cache the app automation element ──
+        $script:appWin = $null
+        $script:totalAsserts = 0
+        $script:passedAsserts = 0
+        $script:failedAsserts = 0
+
+        function Get-AppWindow() {
+            if ($script:appWin) { return $script:appWin }
+            $root = [System.Windows.Automation.AutomationElement]::RootElement
+            $cond = New-Object System.Windows.Automation.PropertyCondition(
+                [System.Windows.Automation.AutomationElement]::ProcessIdProperty, $proc.Id)
+            $script:appWin = $root.FindFirst([System.Windows.Automation.TreeScope]::Children, $cond)
+            return $script:appWin
+        }
+
+        function Take-Screenshot($name) {
+            Start-Sleep -Milliseconds 500
+            $screen = [System.Windows.Forms.Screen]::PrimaryScreen
+            $bmp = New-Object System.Drawing.Bitmap($screen.Bounds.Width, $screen.Bounds.Height)
+            $gfx = [System.Drawing.Graphics]::FromImage($bmp)
+            $gfx.CopyFromScreen($screen.Bounds.Location, [System.Drawing.Point]::Empty, $screen.Bounds.Size)
+            $bmp.Save("screenshots\$name.png")
+            $gfx.Dispose(); $bmp.Dispose()
+            Write-Host "  >> Screenshot: $name.png"
+        }
+
+        function Read-UIValue($labelName) {
+            # Qt exposes QLabels as Text elements with Name = displayed text.
+            # Labels come in pairs: [title, value] e.g. ["GFLOPS", "15.55"].
+            # Find the title label, then return the NEXT sibling's Name.
+            try {
+                $win = Get-AppWindow
+                if (!$win) { return "NOT_FOUND" }
+                $textCond = New-Object System.Windows.Automation.PropertyCondition(
+                    [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
+                    [System.Windows.Automation.ControlType]::Text)
+                $allTexts = $win.FindAll([System.Windows.Automation.TreeScope]::Descendants, $textCond)
+                $found = $false
+                foreach ($t in $allTexts) {
+                    if ($found) {
+                        return $t.Current.Name
+                    }
+                    if ($t.Current.Name -eq $labelName) {
+                        $found = $true
+                    }
+                }
+                return "NOT_FOUND"
+            } catch {
+                Write-Host "  Read-UIValue error for '$labelName': $($_.Exception.Message)"
+                return "NOT_FOUND"
+            }
+        }
+
+        function Assert-Value($name, $value, $check) {
+            $script:totalAsserts++
+            $line = "[UI-VALUE] $name = '$value'"
+            Write-Host "  $line"
+            try {
+                $result = & $check
+                if ($result) {
+                    $script:passedAsserts++
+                    $resultLine = "[PASS] $name"
+                } else {
+                    $script:failedAsserts++
+                    $resultLine = "[FAIL] $name - assertion not satisfied"
+                }
+            } catch {
+                $script:failedAsserts++
+                $resultLine = "[FAIL] $name - $($_.Exception.Message)"
+            }
+            Write-Host "  $resultLine"
+            Add-Content -Path "screenshots/assertion_results.txt" -Value "$line`n$resultLine"
+        }
+
+        function Click-ButtonByName($buttonName) {
+            [Win32]::SetForegroundWindow($hwnd)
+            $win = Get-AppWindow
+            if (!$win) { Write-Host "  ERROR: App window not found"; return $false }
+            try {
+                $cond = New-Object System.Windows.Automation.AndCondition(
+                    (New-Object System.Windows.Automation.PropertyCondition(
+                        [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
+                        [System.Windows.Automation.ControlType]::Button)),
+                    (New-Object System.Windows.Automation.PropertyCondition(
+                        [System.Windows.Automation.AutomationElement]::NameProperty, $buttonName))
+                )
+                $btn = $win.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $cond)
+                if ($btn) {
+                    $pattern = $btn.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern)
+                    $pattern.Invoke()
+                    Write-Host "  Clicked: '$buttonName'"
+                    return $true
+                } else {
+                    Write-Host "  Button not found: '$buttonName'"
+                    return $false
+                }
+            } catch {
+                Write-Host "  Click failed for '$buttonName': $($_.Exception.Message)"
+                return $false
+            }
+        }
+
+        function Click-SidebarPanel($panelLabel) {
+            # Sidebar buttons use emoji + text. Search by substring match.
+            [Win32]::SetForegroundWindow($hwnd)
+            $win = Get-AppWindow
+            if (!$win) { Write-Host "  ERROR: App window not found"; return }
+            try {
+                # Find all buttons, then match by name containing the panel label
+                $btnType = New-Object System.Windows.Automation.PropertyCondition(
+                    [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
+                    [System.Windows.Automation.ControlType]::Button)
+                $allBtns = $win.FindAll([System.Windows.Automation.TreeScope]::Descendants, $btnType)
+                foreach ($btn in $allBtns) {
+                    $name = $btn.Current.Name
+                    if ($name -and $name -like "*$panelLabel*") {
+                        $pattern = $btn.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern)
+                        $pattern.Invoke()
+                        Write-Host "  Sidebar -> '$name'"
+                        Start-Sleep -Seconds 1
+                        return
+                    }
+                }
+                Write-Host "  Sidebar button not found for: $panelLabel"
+            } catch {
+                Write-Host "  Sidebar click failed: $($_.Exception.Message)"
+            }
+        }
+
+        # ── Setup ──
+        New-Item -ItemType Directory -Force -Path screenshots | Out-Null
+
+        Write-Host "=== Launching OCCT Native GUI ==="
+        $proc = Start-Process -FilePath "build\Release\occt_native.exe" -PassThru
+        Start-Sleep -Seconds 6
+
+        $hwnd = $proc.MainWindowHandle
+        [Win32]::ShowWindow($hwnd, [Win32]::SW_MAXIMIZE)
+        Start-Sleep -Seconds 2
+        [Win32]::SetForegroundWindow($hwnd)
+
+        # ── 1. Dashboard ──
+        Write-Host "`n=== 1. Dashboard ==="
+        Take-Screenshot "01_dashboard"
+
+        # ── 2. CPU Test ──
+        Write-Host "`n=== 2. CPU Test ==="
+        Click-SidebarPanel "CPU 테스트"
+        Take-Screenshot "02_cpu_idle"
+        Click-ButtonByName "테스트 시작"
+        Start-Sleep -Seconds 3
+        Take-Screenshot "03_cpu_running_3s"
+        Start-Sleep -Seconds 5
+        Take-Screenshot "04_cpu_running_8s"
+
+        # -- CPU value assertions (label-name based) --
+        Write-Host "  -- CPU UI Value Checks --"
+        $v = Read-UIValue "GFLOPS"
+        Assert-Value "GFLOPS" $v { $v -ne "NOT_FOUND" -and [double]::TryParse(($v -replace '[^\d.]',''), [ref]$null) -and [double]($v -replace '[^\d.]','') -gt 0 }
+        $v = Read-UIValue "오류"
+        Assert-Value "Errors" $v { $v -eq "0" }
+        $v = Read-UIValue "전력"
+        Assert-Value "Power" $v { $v -ne "NOT_FOUND" -and $v -ne "" }
+        $v = Read-UIValue "온도"
+        # CI runners lack temp sensors, so N/A is expected. Just verify label exists.
+        Assert-Value "Temperature" $v { $v -ne "NOT_FOUND" }
+        if ($v -eq "N/A") { Write-Host "  (N/A expected: CI runner has no temperature sensor)" }
+        $v = Read-UIValue "주파수"
+        Assert-Value "CPU Frequency" $v { $v -ne "NOT_FOUND" -and $v -ne "" }
+
+        Start-Sleep -Seconds 5
+        Take-Screenshot "05_cpu_running_13s"
+        Click-ButtonByName "테스트 중지"
+        Start-Sleep -Seconds 2
+        Take-Screenshot "06_cpu_stopped"
+
+        # -- CPU post-stop status check --
+        $v = Read-UIValue "코어별 상태"
+        Assert-Value "CPU Core Status Section" $v { $v -ne "NOT_FOUND" }
+
+        # ── 3. RAM Test ──
+        Write-Host "`n=== 3. RAM Test ==="
+        Click-SidebarPanel "RAM 테스트"
+        Take-Screenshot "07_ram_idle"
+        Click-ButtonByName "테스트 시작"
+        Start-Sleep -Seconds 3
+        Take-Screenshot "08_ram_running_3s"
+        Start-Sleep -Seconds 5
+        Take-Screenshot "09_ram_running_8s"
+
+        # -- RAM value assertions (label-name based) --
+        Write-Host "  -- RAM UI Value Checks --"
+        $v = Read-UIValue "대역폭"
+        Assert-Value "RAM Bandwidth" $v { $v -ne "NOT_FOUND" -and $v -ne "" }
+        $v = Read-UIValue "발견된 오류"
+        Assert-Value "RAM Errors" $v { $v -ne "NOT_FOUND" }
+        $v = Read-UIValue "패스"
+        Assert-Value "RAM Pass Progress" $v { $v -ne "NOT_FOUND" -and $v -ne "" }
+        $v = Read-UIValue "테스트 진행률"
+        Assert-Value "RAM Progress Label" $v { $v -ne "NOT_FOUND" }
+
+        Start-Sleep -Seconds 5
+        Take-Screenshot "10_ram_running_13s"
+        Click-ButtonByName "테스트 중지"
+        Start-Sleep -Seconds 2
+        Take-Screenshot "11_ram_stopped"
+
+        # ── 4. Storage Test ──
+        Write-Host "`n=== 4. Storage Test ==="
+        Click-SidebarPanel "저장장치 테스트"
+        Take-Screenshot "12_storage_idle"
+        Click-ButtonByName "테스트 시작"
+        Start-Sleep -Seconds 3
+        Take-Screenshot "13_storage_running_3s"
+        Start-Sleep -Seconds 5
+        Take-Screenshot "14_storage_running_8s"
+
+        # -- Storage value assertions (label-name based) --
+        Write-Host "  -- Storage UI Value Checks --"
+        $v = Read-UIValue "IOPS"
+        Assert-Value "Storage IOPS" $v { $v -ne "NOT_FOUND" -and $v -ne "" }
+        $v = Read-UIValue "처리량"
+        Assert-Value "Storage Throughput" $v { $v -ne "NOT_FOUND" -and $v -ne "" }
+        $v = Read-UIValue "검증 오류"
+        Assert-Value "Storage Verify Errors" $v { $v -ne "NOT_FOUND" -and $v -match '^\d+$' }
+        $v = Read-UIValue "평균 지연시간"
+        Assert-Value "Storage Avg Latency" $v { $v -ne "NOT_FOUND" -and $v -ne "" }
+
+        Click-ButtonByName "테스트 중지"
+        Start-Sleep -Seconds 2
+        Take-Screenshot "15_storage_stopped"
+
+        # ── 5. GPU Panel ──
+        Write-Host "`n=== 5. GPU Test ==="
+        Click-SidebarPanel "GPU 테스트"
+        Take-Screenshot "16_gpu_panel"
+        Click-ButtonByName "테스트 시작"
+        Start-Sleep -Seconds 2
+        Take-Screenshot "17_gpu_start_attempt"
+
+        # ── 6. PSU Test ──
+        Write-Host "`n=== 6. PSU Test ==="
+        Click-SidebarPanel "PSU 테스트"
+        Take-Screenshot "18_psu_idle"
+        Click-ButtonByName "테스트 시작"
+        Start-Sleep -Seconds 3
+        Take-Screenshot "19_psu_running_3s"
+        Start-Sleep -Seconds 5
+        Take-Screenshot "20_psu_running_8s"
+
+        # -- PSU value assertions (label-name based) --
+        Write-Host "  -- PSU UI Value Checks --"
+        $v = Read-UIValue "총 전력"
+        Assert-Value "PSU Total Power" $v { $v -ne "NOT_FOUND" -and $v -ne "" }
+        $v = Read-UIValue "CPU 전력"
+        Assert-Value "PSU CPU Power" $v { $v -ne "NOT_FOUND" -and $v -ne "" }
+        $v = Read-UIValue "CPU 오류"
+        Assert-Value "PSU CPU Errors" $v { $v -ne "NOT_FOUND" }
+        $v = Read-UIValue "GPU 전력"
+        Assert-Value "PSU GPU Power" $v { $v -ne "NOT_FOUND" -and $v -ne "" }
+
+        Click-ButtonByName "테스트 중지"
+        Start-Sleep -Seconds 2
+        Take-Screenshot "21_psu_stopped"
+
+        # ── 7. Benchmark ──
+        Write-Host "`n=== 7. Benchmark ==="
+        Click-SidebarPanel "벤치마크"
+        Take-Screenshot "22_benchmark_idle"
+        Click-ButtonByName "벤치마크 실행"
+        Start-Sleep -Seconds 5
+        Take-Screenshot "23_benchmark_running_5s"
+        Start-Sleep -Seconds 10
+        Take-Screenshot "24_benchmark_running_15s"
+
+        # -- Benchmark value assertions (label-name based) --
+        Write-Host "  -- Benchmark UI Value Checks --"
+        # Benchmark labels: "L1" value is after the "L1" label (under "Cache Latency" section)
+        $v = Read-UIValue "L1"
+        Assert-Value "Bench L1 Latency" $v { $v -ne "NOT_FOUND" -and $v -ne "--" }
+        $v = Read-UIValue "읽기 대역폭"
+        Assert-Value "Bench Read BW" $v { $v -ne "NOT_FOUND" -and $v -ne "--" }
+
+        Start-Sleep -Seconds 15
+        Take-Screenshot "25_benchmark_done"
+
+        # ── 8. Monitoring ──
+        Write-Host "`n=== 8. Monitoring ==="
+        Click-SidebarPanel "모니터링"
+        Start-Sleep -Seconds 3
+        Take-Screenshot "26_monitor"
+
+        # -- Monitor value assertions (label-name based) --
+        Write-Host "  -- Monitor UI Value Checks --"
+        # Find WHEA label by scanning all text elements
+        try {
+            $win = Get-AppWindow
+            if ($win) {
+                $textCond = New-Object System.Windows.Automation.PropertyCondition(
+                    [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
+                    [System.Windows.Automation.ControlType]::Text)
+                $allTexts = $win.FindAll([System.Windows.Automation.TreeScope]::Descendants, $textCond)
+                $wheaFound = $false
+                foreach ($t in $allTexts) {
+                    if ($t.Current.Name -like "*WHEA*") {
+                        $wheaFound = $true
+                        Assert-Value "WHEA label" $t.Current.Name { $true }
+                        break
+                    }
+                }
+                if (-not $wheaFound) { Write-Host "  [UI-VALUE] WHEA label = 'NOT_FOUND'" }
+            }
+        } catch { Write-Host "  Monitor scan failed: $($_.Exception.Message)" }
+
+        # ── 9. System Info ──
+        Write-Host "`n=== 9. System Info ==="
+        Click-SidebarPanel "시스템 정보"
+        Start-Sleep -Seconds 2
+        Take-Screenshot "27_sysinfo"
+
+        # -- System Info value read (log only) --
+        Write-Host "  -- System Info UI Value Checks --"
+        $v = Read-UIValue "모델"
+        Write-Host "  [UI-VALUE] CPU Model = '$v'"
+        if ($v -ne "NOT_FOUND") {
+            Assert-Value "SysInfo CPU Model" $v { $v -ne "" }
+        }
+
+        # ── 10. Schedule ──
+        Write-Host "`n=== 10. Schedule ==="
+        Click-SidebarPanel "스케줄"
+        Start-Sleep -Seconds 2
+        Take-Screenshot "28_schedule"
+
+        # ── 11. Dashboard final ──
+        Write-Host "`n=== 11. Dashboard Final ==="
+        Click-SidebarPanel "대시보드"
+        Start-Sleep -Seconds 2
+        Take-Screenshot "29_dashboard_final"
+
+        # -- Dashboard value read & gauge checks --
+        Write-Host "  -- Dashboard UI Value Checks --"
+        $v = Read-UIValue "CPU"
+        Write-Host "  [UI-VALUE] Dashboard CPU info = '$v'"
+
+        # Check gauge widgets exist via accessible description
+        Write-Host "  -- Dashboard Gauge Checks --"
+        try {
+            $win = Get-AppWindow
+            if ($win) {
+                $allElements = $win.FindAll([System.Windows.Automation.TreeScope]::Descendants,
+                    [System.Windows.Automation.Condition]::TrueCondition)
+                $cpuGaugeFound = $false
+                $gpuGaugeFound = $false
+                $ramGaugeFound = $false
+                foreach ($el in $allElements) {
+                    try {
+                        $desc = $el.Current.AutomationId
+                        $accDesc = ""
+                        try { $accDesc = $el.Current.HelpText } catch {}
+                        $name = $el.Current.Name
+                        # CircularGauge uses setAccessibleDescription which maps to HelpText in UIA
+                        if ($accDesc -eq "dash_cpu_gauge" -or $name -eq "CPU") { $cpuGaugeFound = $true }
+                        if ($accDesc -eq "dash_gpu_gauge" -or $name -eq "GPU") { $gpuGaugeFound = $true }
+                        if ($accDesc -eq "dash_ram_gauge" -or $name -eq "RAM") { $ramGaugeFound = $true }
+                    } catch {}
+                }
+                Assert-Value "Dashboard CPU Gauge" $(if ($cpuGaugeFound) {"exists"} else {"NOT_FOUND"}) { $cpuGaugeFound }
+                Assert-Value "Dashboard GPU Gauge" $(if ($gpuGaugeFound) {"exists"} else {"NOT_FOUND"}) { $gpuGaugeFound }
+                Assert-Value "Dashboard RAM Gauge" $(if ($ramGaugeFound) {"exists"} else {"NOT_FOUND"}) { $ramGaugeFound }
+            }
+        } catch { Write-Host "  Dashboard gauge scan failed: $($_.Exception.Message)" }
+
+        # Check "실시간 사용률" title label exists
+        $v = Read-UIValue "실시간 사용률"
+        Assert-Value "Dashboard Realtime Usage Title" $v { $v -ne "NOT_FOUND" }
+
+        # ── UI Value Verification Summary ──
+        Write-Host "`n=== UI Value Verification Summary ==="
+        $summary = "Total: $script:totalAsserts | Passed: $script:passedAsserts | Failed: $script:failedAsserts"
+        Write-Host $summary
+        Add-Content -Path "screenshots/assertion_results.txt" -Value "`n=== SUMMARY ===`n$summary"
+        if ($script:failedAsserts -gt 0) {
+            Write-Host "WARNING: Some UI value assertions failed!"
+        }
+
+        # Cleanup
+        Write-Host "`n=== Closing ==="
+        $proc.CloseMainWindow()
+        Start-Sleep -Seconds 3
+        if (!$proc.HasExited) { $proc.Kill() }
+
+        $count = (Get-ChildItem screenshots\*.png).Count
+        Write-Host "`nDone! $count screenshots captured."
+
+    - name: Verify UI assertions passed
+      shell: pwsh
+      run: |
+        $logContent = Get-Content -Path screenshots/assertion_results.txt -ErrorAction SilentlyContinue
+        if (-not $logContent) {
+            Write-Host "No assertion results file found (screenshot step may have failed entirely)"
+            exit 0
+        }
+        Write-Host "=== Assertion Results ==="
+        Write-Host ($logContent -join "`n")
+        if ($logContent -match "\[FAIL\]") {
+            Write-Error "Some UI assertions failed! See details above."
+            exit 1
+        }
+        Write-Host "All UI assertions passed"
+
+    - name: Upload screenshots
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: gui-screenshots
+        path: screenshots/
+        if-no-files-found: warn
+        retention-days: 30

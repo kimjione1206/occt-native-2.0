@@ -1,0 +1,501 @@
+name: CPU Deep Test
+
+on:
+  workflow_dispatch:
+
+env:
+  BUILD_TYPE: Release
+  QT_VERSION: '6.8.2'
+
+jobs:
+  cpu-cli-deep-test:
+    name: CLI CPU Deep Tests (All Modes)
+    runs-on: windows-latest
+    timeout-minutes: 45
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Install Qt6
+      uses: jurplel/install-qt-action@v4
+      with:
+        version: ${{ env.QT_VERSION }}
+        host: windows
+        target: desktop
+        arch: win64_msvc2022_64
+        modules: 'qtcharts'
+        cache: true
+
+    - name: Configure CMake (CLI mode)
+      run: >
+        cmake -B build
+        -G "Visual Studio 17 2022"
+        -A x64
+        -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }}
+        -DCMAKE_PREFIX_PATH="${{ env.Qt6_DIR }}"
+        -DOCCT_CONSOLE=ON
+
+    - name: Build
+      run: cmake --build build --config ${{ env.BUILD_TYPE }} --parallel
+
+    - name: Run all CPU CLI tests
+      shell: pwsh
+      run: |
+        $PSNativeCommandUseErrorActionPreference = $false
+        $ErrorActionPreference = 'Continue'
+
+        $exe = "build/${{ env.BUILD_TYPE }}/occt_native.exe"
+        New-Item -ItemType Directory -Force -Path cpu-cli-logs | Out-Null
+        New-Item -ItemType Directory -Force -Path cpu-test-summary | Out-Null
+
+        $results = @()
+
+        function Run-CpuTest($testName, $testArgs) {
+            Write-Host "`n=========================================="
+            Write-Host "TEST: $testName"
+            Write-Host "ARGS: $testArgs"
+            Write-Host "==========================================`n"
+
+            $logFile = "cpu-cli-logs/${testName}.log"
+            $cmd = "& `"$exe`" --cli $testArgs"
+
+            $startTime = Get-Date
+            Invoke-Expression "$cmd 2>&1" | Tee-Object -FilePath $logFile
+            $exitCode = $LASTEXITCODE
+            $elapsed = ((Get-Date) - $startTime).TotalSeconds
+
+            Write-Host "`nExit code: $exitCode (elapsed: $([math]::Round($elapsed, 1))s)"
+
+            # Parse log for key metrics
+            $logContent = Get-Content $logFile -Raw -ErrorAction SilentlyContinue
+            $gflopsFound = $false
+            $errorCountFound = $false
+            $tempFound = $false
+            $powerFound = $false
+
+            if ($logContent) {
+                if ($logContent -match '"gflops"\s*:\s*([\d.]+)' -or $logContent -match 'GFLOPS\s*[:=]\s*([\d.]+)' -or $logContent -match 'gflops.*?(\d+\.\d+)') {
+                    $gflopsVal = [double]$Matches[1]
+                    if ($gflopsVal -gt 0) { $gflopsFound = $true }
+                    Write-Host "  GFLOPS: $gflopsVal $(if ($gflopsFound) {'[OK]'} else {'[WARN: zero]'})"
+                }
+                if ($logContent -match '"error_count"\s*:\s*(\d+)' -or $logContent -match 'error.*?count\s*[:=]\s*(\d+)' -or $logContent -match 'errors?\s*[:=]\s*(\d+)') {
+                    $errorCountFound = $true
+                    Write-Host "  Error count: $($Matches[1]) [OK]"
+                }
+                if ($logContent -match 'temperature|temp.*?(\d+\.?\d*)' -or $logContent -match '"temperature"') {
+                    $tempFound = $true
+                    Write-Host "  Temperature field: [FOUND]"
+                }
+                if ($logContent -match 'power.*?watts|power_watts|"power"' -or $logContent -match '(\d+\.?\d*)\s*W') {
+                    $powerFound = $true
+                    Write-Host "  Power field: [FOUND]"
+                }
+            }
+
+            $status = if ($exitCode -eq 0 -or $exitCode -eq 1) { "PASS" } elseif ($exitCode -eq 2) { "WARN" } else { "FAIL" }
+
+            $script:results += [PSCustomObject]@{
+                Test = $testName
+                ExitCode = $exitCode
+                Status = $status
+                Elapsed = "$([math]::Round($elapsed, 1))s"
+                GFLOPS = if ($gflopsFound) { "OK" } else { "N/A" }
+                Errors = if ($errorCountFound) { "OK" } else { "N/A" }
+                Temp = if ($tempFound) { "OK" } else { "N/A" }
+                Power = if ($powerFound) { "OK" } else { "N/A" }
+            }
+
+            return $exitCode
+        }
+
+        # ── Test 1: AVX2 FMA ──
+        Run-CpuTest "01_avx2" "--test cpu --mode avx2 --duration 8 --threads 2"
+
+        # ── Test 2: SSE ──
+        Run-CpuTest "02_sse" "--test cpu --mode sse --duration 5 --threads 2"
+
+        # ── Test 3: Linpack ──
+        Run-CpuTest "03_linpack" "--test cpu --mode linpack --duration 5 --threads 1"
+
+        # ── Test 4: Prime ──
+        Run-CpuTest "04_prime" "--test cpu --mode prime --duration 5 --threads 2"
+
+        # ── Test 5: Cache Only ──
+        Run-CpuTest "05_cache" "--test cpu --mode cache --duration 5"
+
+        # ── Test 6: Large Data Set ──
+        Run-CpuTest "06_large_data" "--test cpu --mode large_data --duration 5"
+
+        # ── Test 7: All (mixed workload) ──
+        Run-CpuTest "07_all" "--test cpu --mode all --duration 10 --threads 2"
+
+        # ── Test 8: Load Pattern - Steady ──
+        Run-CpuTest "08_pattern_steady" "--test cpu --mode avx2 --load-pattern steady --duration 5 --threads 2"
+
+        # ── Test 9: Load Pattern - Variable ──
+        Run-CpuTest "09_pattern_variable" "--test cpu --mode avx2 --load-pattern variable --duration 5 --threads 2"
+
+        # ── Test 10: Load Pattern - Core Cycling ──
+        Run-CpuTest "10_pattern_core_cycling" "--test cpu --mode avx2 --load-pattern core_cycling --duration 5 --threads 2"
+
+        # ── Test 11: Intensity - Extreme ──
+        Run-CpuTest "11_intensity_extreme" "--test cpu --mode avx2 --intensity extreme --duration 5 --threads 2"
+
+        # ── Test 12: Monitor Only (CSV) ──
+        Run-CpuTest "12_monitor_csv" "--monitor-only --duration 5 --csv monitor_output.csv"
+
+        # ── Summary ──
+        Write-Host "`n`n============================================"
+        Write-Host "       CPU CLI DEEP TEST SUMMARY"
+        Write-Host "============================================"
+        $results | Format-Table -AutoSize
+
+        $passed = ($results | Where-Object { $_.Status -eq "PASS" }).Count
+        $warned = ($results | Where-Object { $_.Status -eq "WARN" }).Count
+        $failed = ($results | Where-Object { $_.Status -eq "FAIL" }).Count
+        $total = $results.Count
+
+        $summaryText = @"
+        CPU CLI Deep Test Summary
+        =========================
+        Date: $(Get-Date -Format "yyyy-MM-dd HH:mm:ss UTC" -AsUTC)
+        Total: $total | Passed: $passed | Warned: $warned | Failed: $failed
+
+        Detailed Results:
+        "@
+
+        foreach ($r in $results) {
+            $summaryText += "`n  [$($r.Status)] $($r.Test) - Exit:$($r.ExitCode) Time:$($r.Elapsed) GFLOPS:$($r.GFLOPS) Errors:$($r.Errors) Temp:$($r.Temp) Power:$($r.Power)"
+        }
+
+        $summaryText | Out-File -FilePath "cpu-test-summary/cli-summary.txt" -Encoding UTF8
+        Write-Host "`nSummary written to cpu-test-summary/cli-summary.txt"
+
+        Write-Host "`nPassed: $passed / $total"
+        if ($failed -gt 0) {
+            Write-Host "WARNING: $failed test(s) failed!" -ForegroundColor Red
+        }
+
+        # Copy CSV output if it exists
+        if (Test-Path "monitor_output.csv") {
+            Copy-Item "monitor_output.csv" "cpu-cli-logs/monitor_output.csv"
+        }
+
+        exit 0
+
+    - name: Upload CLI test logs
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: cpu-cli-logs
+        path: cpu-cli-logs/
+        if-no-files-found: warn
+        retention-days: 30
+
+    - name: Upload CLI test summary
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: cpu-test-summary-cli
+        path: cpu-test-summary/
+        if-no-files-found: warn
+        retention-days: 30
+
+  cpu-gui-deep-test:
+    name: GUI CPU Deep Tests
+    runs-on: windows-latest
+    timeout-minutes: 45
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Install Qt6
+      uses: jurplel/install-qt-action@v4
+      with:
+        version: ${{ env.QT_VERSION }}
+        host: windows
+        target: desktop
+        arch: win64_msvc2022_64
+        modules: 'qtcharts'
+        cache: true
+
+    - name: Install FFmpeg
+      shell: pwsh
+      run: choco install ffmpeg -y --no-progress
+
+    - name: Configure CMake (GUI mode)
+      run: >
+        cmake -B build
+        -G "Visual Studio 17 2022"
+        -A x64
+        -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }}
+        -DCMAKE_PREFIX_PATH="${{ env.Qt6_DIR }}"
+
+    - name: Build
+      run: cmake --build build --config ${{ env.BUILD_TYPE }} --parallel
+
+    - name: Deploy Qt Dependencies
+      shell: pwsh
+      run: |
+        $exe = "build/${{ env.BUILD_TYPE }}/occt_native.exe"
+        & windeployqt --release --no-translations --no-opengl-sw $exe
+        Write-Host "Qt dependencies deployed to: build/${{ env.BUILD_TYPE }}/"
+
+    - name: Run GUI CPU deep tests with screenshots and recording
+      shell: pwsh
+      continue-on-error: true
+      run: |
+        Add-Type -AssemblyName System.Windows.Forms
+        Add-Type -AssemblyName System.Drawing
+        Add-Type -AssemblyName UIAutomationClient
+        Add-Type -AssemblyName UIAutomationTypes
+
+        Add-Type @"
+        using System;
+        using System.Runtime.InteropServices;
+        public class Win32 {
+            [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
+            [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+            public const int SW_MAXIMIZE = 3;
+        }
+        "@
+
+        # ── Global: cache the app automation element ──
+        $script:appWin = $null
+
+        function Get-AppWindow() {
+            if ($script:appWin) { return $script:appWin }
+            $root = [System.Windows.Automation.AutomationElement]::RootElement
+            $cond = New-Object System.Windows.Automation.PropertyCondition(
+                [System.Windows.Automation.AutomationElement]::ProcessIdProperty, $proc.Id)
+            $script:appWin = $root.FindFirst([System.Windows.Automation.TreeScope]::Children, $cond)
+            return $script:appWin
+        }
+
+        function Take-Screenshot($name) {
+            Start-Sleep -Milliseconds 500
+            $screen = [System.Windows.Forms.Screen]::PrimaryScreen
+            $bmp = New-Object System.Drawing.Bitmap($screen.Bounds.Width, $screen.Bounds.Height)
+            $gfx = [System.Drawing.Graphics]::FromImage($bmp)
+            $gfx.CopyFromScreen($screen.Bounds.Location, [System.Drawing.Point]::Empty, $screen.Bounds.Size)
+            $bmp.Save("screenshots\$name.png")
+            $gfx.Dispose(); $bmp.Dispose()
+            Write-Host "  >> Screenshot: $name.png"
+        }
+
+        function Click-ButtonByName($buttonName) {
+            [Win32]::SetForegroundWindow($hwnd)
+            $win = Get-AppWindow
+            if (!$win) { Write-Host "  ERROR: App window not found"; return $false }
+            try {
+                $cond = New-Object System.Windows.Automation.AndCondition(
+                    (New-Object System.Windows.Automation.PropertyCondition(
+                        [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
+                        [System.Windows.Automation.ControlType]::Button)),
+                    (New-Object System.Windows.Automation.PropertyCondition(
+                        [System.Windows.Automation.AutomationElement]::NameProperty, $buttonName))
+                )
+                $btn = $win.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $cond)
+                if ($btn) {
+                    $pattern = $btn.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern)
+                    $pattern.Invoke()
+                    Write-Host "  Clicked: '$buttonName'"
+                    return $true
+                } else {
+                    Write-Host "  Button not found: '$buttonName'"
+                    return $false
+                }
+            } catch {
+                Write-Host "  Click failed for '$buttonName': $($_.Exception.Message)"
+                return $false
+            }
+        }
+
+        function Click-SidebarPanel($panelLabel) {
+            # Sidebar buttons use emoji + text. Search by substring match.
+            [Win32]::SetForegroundWindow($hwnd)
+            $win = Get-AppWindow
+            if (!$win) { Write-Host "  ERROR: App window not found"; return }
+            try {
+                # Find all buttons, then match by name containing the panel label
+                $btnType = New-Object System.Windows.Automation.PropertyCondition(
+                    [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
+                    [System.Windows.Automation.ControlType]::Button)
+                $allBtns = $win.FindAll([System.Windows.Automation.TreeScope]::Descendants, $btnType)
+                foreach ($btn in $allBtns) {
+                    $name = $btn.Current.Name
+                    if ($name -and $name -like "*$panelLabel*") {
+                        $pattern = $btn.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern)
+                        $pattern.Invoke()
+                        Write-Host "  Sidebar -> '$name'"
+                        Start-Sleep -Seconds 1
+                        return
+                    }
+                }
+                Write-Host "  Sidebar button not found for: $panelLabel"
+            } catch {
+                Write-Host "  Sidebar click failed: $($_.Exception.Message)"
+            }
+        }
+
+        # ── Setup directories ──
+        New-Item -ItemType Directory -Force -Path screenshots | Out-Null
+        New-Item -ItemType Directory -Force -Path cpu-gui-recording | Out-Null
+        New-Item -ItemType Directory -Force -Path cpu-test-summary | Out-Null
+
+        # ── Start FFmpeg screen recording ──
+        Write-Host "=== Starting FFmpeg screen recording ==="
+        $ffmpegArgs = "-y -f gdigrab -framerate 10 -i desktop -c:v libx264 -preset ultrafast -pix_fmt yuv420p cpu-gui-recording/cpu_test_recording.mp4"
+        $ffmpeg = Start-Process -FilePath "ffmpeg" -ArgumentList $ffmpegArgs -PassThru -NoNewWindow -RedirectStandardError "cpu-gui-recording/ffmpeg.log"
+        Start-Sleep -Seconds 2
+        Write-Host "  FFmpeg PID: $($ffmpeg.Id)"
+
+        # ── Launch app ──
+        Write-Host "`n=== Launching OCCT Native GUI ==="
+        $proc = Start-Process -FilePath "build\Release\occt_native.exe" -PassThru
+        Start-Sleep -Seconds 6
+
+        $hwnd = $proc.MainWindowHandle
+        [Win32]::ShowWindow($hwnd, [Win32]::SW_MAXIMIZE)
+        Start-Sleep -Seconds 2
+        [Win32]::SetForegroundWindow($hwnd)
+
+        # ── Step 1-2: Dashboard initial ──
+        Write-Host "`n=== Step 1-2: Dashboard Initial ==="
+        Take-Screenshot "01_dashboard_initial"
+
+        # ── Step 3-4: Navigate to CPU Test panel ──
+        Write-Host "`n=== Step 3-4: CPU Panel ==="
+        Click-SidebarPanel "CPU Test"
+        Take-Screenshot "02_cpu_panel_idle"
+
+        # ── Step 5: Verify controls visible ──
+        Write-Host "`n=== Step 5: CPU Controls ==="
+        Take-Screenshot "03_cpu_controls"
+
+        # ── Step 6-12: Test 1 — AVX2 FMA (default mode) ──
+        Write-Host "`n=== Steps 6-12: CPU Test 1 — AVX2 FMA ==="
+        Click-ButtonByName "Start Test"
+
+        Start-Sleep -Seconds 2
+        Take-Screenshot "04_cpu_running_2s"
+
+        Start-Sleep -Seconds 3
+        Take-Screenshot "05_cpu_running_5s"
+
+        Start-Sleep -Seconds 3
+        Take-Screenshot "06_cpu_running_8s"
+
+        Start-Sleep -Seconds 4
+        Take-Screenshot "07_cpu_running_12s"
+
+        Write-Host "  Stopping test..."
+        Click-ButtonByName "Stop Test"
+        Start-Sleep -Seconds 2
+        Take-Screenshot "08_cpu_stopped"
+
+        # ── Step 13: Metrics detail ──
+        Write-Host "`n=== Step 13: Metrics Detail ==="
+        Take-Screenshot "09_cpu_metrics_detail"
+
+        # ── Step 14: After stop state ──
+        Write-Host "`n=== Step 14: After Stop State ==="
+        Take-Screenshot "10_cpu_after_stop"
+
+        # ── Step 15-16: Check Monitoring panel for CPU data ──
+        Write-Host "`n=== Steps 15-16: Monitoring Panel ==="
+        Click-SidebarPanel "Monitoring"
+        Start-Sleep -Seconds 3
+        Take-Screenshot "11_monitor_cpu_data"
+
+        # ── Step 17-18: Check Dashboard for CPU gauge ──
+        Write-Host "`n=== Steps 17-18: Dashboard CPU Gauge ==="
+        Click-SidebarPanel "Dashboard"
+        Start-Sleep -Seconds 2
+        Take-Screenshot "12_dashboard_cpu_gauge"
+
+        # ── Step 19-23: Return to CPU and run another short test ──
+        Write-Host "`n=== Steps 19-23: CPU Test 2 — Second Run ==="
+        Click-SidebarPanel "CPU Test"
+        Start-Sleep -Seconds 1
+
+        Click-ButtonByName "Start Test"
+        Start-Sleep -Seconds 5
+        Take-Screenshot "13_cpu_second_run"
+
+        Click-ButtonByName "Stop Test"
+        Start-Sleep -Seconds 2
+        Take-Screenshot "14_cpu_second_stopped"
+
+        # ── Step 24: Close app ──
+        Write-Host "`n=== Step 24: Closing Application ==="
+        $proc.CloseMainWindow()
+        Start-Sleep -Seconds 3
+        if (!$proc.HasExited) { $proc.Kill() }
+
+        # ── Stop FFmpeg recording ──
+        Write-Host "`n=== Stopping FFmpeg recording ==="
+        Start-Sleep -Seconds 2
+        if (!$ffmpeg.HasExited) {
+            Stop-Process $ffmpeg -Force
+            Start-Sleep -Seconds 2
+        }
+        Write-Host "  Recording saved to cpu-gui-recording/cpu_test_recording.mp4"
+
+        # ── Summary ──
+        $count = (Get-ChildItem screenshots\*.png -ErrorAction SilentlyContinue).Count
+        Write-Host "`nDone! $count screenshots captured."
+
+        $guiSummary = @"
+        CPU GUI Deep Test Summary
+        =========================
+        Date: $(Get-Date -Format "yyyy-MM-dd HH:mm:ss UTC" -AsUTC)
+        Screenshots captured: $count
+        Recording: cpu_test_recording.mp4
+
+        Test sequence:
+          1. Dashboard initial view
+          2. CPU panel idle state
+          3. CPU controls verification
+          4-7. CPU test running (AVX2 FMA) at 2s, 5s, 8s, 12s
+          8. CPU test stopped
+          9. Metrics detail view
+          10. After-stop state
+          11. Monitoring panel with CPU data
+          12. Dashboard CPU gauge
+          13. Second CPU test run (5s)
+          14. Second test stopped
+        "@
+
+        $guiSummary | Out-File -FilePath "cpu-test-summary/gui-summary.txt" -Encoding UTF8
+        Write-Host "Summary written to cpu-test-summary/gui-summary.txt"
+
+    - name: Upload GUI screenshots
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: cpu-gui-screenshots
+        path: screenshots/
+        if-no-files-found: warn
+        retention-days: 30
+
+    - name: Upload GUI recording
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: cpu-gui-recording
+        path: cpu-gui-recording/
+        if-no-files-found: warn
+        retention-days: 30
+
+    - name: Upload GUI test summary
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: cpu-test-summary-gui
+        path: cpu-test-summary/
+        if-no-files-found: warn
+        retention-days: 30

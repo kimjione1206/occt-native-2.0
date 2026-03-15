@@ -1,0 +1,61 @@
+{
+    "stop_on_error": true,
+    "steps": [
+        {
+            "engine": "gpu",
+            "duration_secs": 30,
+            "parallel_with_next": false,
+            "settings": {
+                "mode": "matrix_mul"
+            }
+        },
+        {
+            "engine": "gpu",
+            "duration_secs": 30,
+            "parallel_with_next": false,
+            "settings": {
+                "mode": "fp64"
+            }
+        },
+        {
+            "engine": "gpu",
+            "duration_secs": 30,
+            "parallel_with_next": false,
+            "settings": {
+                "mode": "fma"
+            }
+        },
+        {
+            "engine": "gpu",
+            "duration_secs": 30,
+            "parallel_with_next": false,
+            "settings": {
+                "mode": "vram"
+            }
+        },
+        {
+            "engine": "gpu",
+            "duration_secs": 30,
+            "parallel_with_next": false,
+            "settings": {
+                "mode": "vulkan_3d"
+            }
+        },
+        {
+            "engine": "psu",
+            "duration_secs": 30,
+            "parallel_with_next": false,
+            "settings": {
+                "mode": "steady"
+            }
+        },
+        {
+            "engine": "psu",
+            "duration_secs": 30,
+            "parallel_with_next": false,
+            "settings": {
+                "mode": "spike"
+            }
+        }
+    ]
+}

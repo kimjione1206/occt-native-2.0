@@ -1,0 +1,31 @@
+============================================================================
+ Third-Party Software Licenses
+============================================================================
+
+This application includes the following third-party software components:
+
+----------------------------------------------------------------------------
+ Qt 6 Framework
+----------------------------------------------------------------------------
+ License:    GNU Lesser General Public License v3 (LGPL-3.0)
+ Website:    https://www.qt.io/
+ Source:     https://code.qt.io/cgit/qt/qtbase.git/
+
+ Qt is used under the LGPL v3 license. The Qt libraries are dynamically
+ linked as shared libraries (DLLs). You may replace these libraries with
+ your own LGPL-compatible versions.
+
+ The full text of the LGPL v3 license is available at:
+ https://www.gnu.org/licenses/lgpl-3.0.html
+
+ Qt modules used: QtCore, QtGui, QtWidgets, QtCharts
+
+----------------------------------------------------------------------------
+ NOTICE
+----------------------------------------------------------------------------
+ The OCCT Native Stress Test application itself (occt_native.exe and its
+ source code) is proprietary software. See the LICENSE file for details.
+
+ Only the third-party components listed above are covered by their
+ respective open-source licenses.
+============================================================================

@@ -1,0 +1,883 @@
+name: Windows Build & CLI Test
+
+on:
+  push:
+    branches: [main, develop, feature/*]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  actions: write
+  contents: read
+
+env:
+  BUILD_TYPE: Release
+  QT_VERSION: '6.8.2'
+
+jobs:
+  build-and-test:
+    name: Windows x64 Build + CLI Tests
+    runs-on: windows-latest
+    timeout-minutes: 30
+
+    steps:
+      # ── Cleanup old artifacts (keep max 5) ──────────────────────────
+      - name: Cleanup Old Artifacts
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const MAX_KEEP = 4; // keep 4, new upload makes 5
+            const artifactName = 'cli-test-results';
+            const { data } = await github.rest.actions.listArtifactsForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              name: artifactName,
+              per_page: 100,
+            });
+            const artifacts = data.artifacts
+              .filter(a => !a.expired)
+              .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+            if (artifacts.length >= MAX_KEEP) {
+              const toDelete = artifacts.slice(MAX_KEEP);
+              for (const art of toDelete) {
+                console.log(`Deleting artifact: ${art.name} #${art.id} (${art.created_at})`);
+                await github.rest.actions.deleteArtifact({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  artifact_id: art.id,
+                });
+              }
+              console.log(`Deleted ${toDelete.length} old artifact(s).`);
+            } else {
+              console.log(`Only ${artifacts.length} artifact(s) found. No cleanup needed.`);
+            }
+
+      # ── Checkout ──────────────────────────────────────────────────────
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # ── Install Qt6 ──────────────────────────────────────────────────
+      - name: Install Qt6
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: ${{ env.QT_VERSION }}
+          arch: win64_msvc2022_64
+          modules: 'qtcharts'
+          cache: true
+
+      # ── Configure CMake ──────────────────────────────────────────────
+      - name: Configure CMake
+        run: >
+          cmake -B build
+          -G "Visual Studio 17 2022"
+          -A x64
+          -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }}
+          -DCMAKE_PREFIX_PATH="${{ env.Qt6_DIR }}"
+          -DOCCT_CONSOLE=ON
+
+      # ── Build ─────────────────────────────────────────────────────────
+      - name: Build
+        run: cmake --build build --config ${{ env.BUILD_TYPE }} --parallel
+
+      # ── Verify executable exists ──────────────────────────────────────
+      - name: Verify Build Output
+        shell: pwsh
+        run: |
+          $exe = Get-ChildItem -Path build -Recurse -Filter "occt_native.exe" | Select-Object -First 1
+          if ($exe) {
+            Write-Host "Found: $($exe.FullName)"
+            Write-Host "Size: $([math]::Round($exe.Length / 1MB, 2)) MB"
+          } else {
+            Write-Error "occt_native.exe not found!"
+            exit 1
+          }
+
+      # ── Create output directories ────────────────────────────────────
+      - name: Create Output Directories
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path test_results | Out-Null
+          Write-Host "Created test_results directory"
+
+      # ════════════════════════════════════════════════════════════════════
+      # A. Basic Tests
+      # ════════════════════════════════════════════════════════════════════
+
+      - name: "A1: Version Flag"
+        shell: pwsh
+        run: |
+          $exe = (Get-ChildItem -Path build -Recurse -Filter "occt_native.exe" | Select-Object -First 1).FullName
+          Write-Host "=== --version ==="
+          & $exe --cli --version
+          if ($LASTEXITCODE) { Write-Error "Test failed with exit code: $LASTEXITCODE"; exit 1 }
+          Write-Host "PASS: --version returned exit code 0"
+
+      - name: "A2: Help Flag"
+        shell: pwsh
+        run: |
+          $exe = (Get-ChildItem -Path build -Recurse -Filter "occt_native.exe" | Select-Object -First 1).FullName
+          Write-Host "=== --help ==="
+          & $exe --cli --help
+          if ($LASTEXITCODE) { Write-Error "Test failed with exit code: $LASTEXITCODE"; exit 1 }
+          Write-Host "PASS: --help returned exit code 0"
+
+      # ════════════════════════════════════════════════════════════════════
+      # B. CPU Tests (all 6 modes + load-pattern + fixed threads)
+      # ════════════════════════════════════════════════════════════════════
+
+      - name: "B1: CPU AVX2 Test (10s, auto threads)"
+        shell: pwsh
+        run: |
+          $exe = (Get-ChildItem -Path build -Recurse -Filter "occt_native.exe" | Select-Object -First 1).FullName
+          Write-Host "=== CPU AVX2 FMA Test (10 seconds, auto threads) ==="
+          & $exe --cli --test cpu --mode avx2 --threads auto --duration 10
+          if ($LASTEXITCODE) { Write-Error "Test failed with exit code: $LASTEXITCODE"; exit 1 }
+          Write-Host "PASS: CPU AVX2 test completed"
+
+      - name: "B2: CPU SSE Test (10s)"
+        shell: pwsh
+        run: |
+          $exe = (Get-ChildItem -Path build -Recurse -Filter "occt_native.exe" | Select-Object -First 1).FullName
+          Write-Host "=== CPU SSE Test (10 seconds) ==="
+          & $exe --cli --test cpu --mode sse --duration 10
+          if ($LASTEXITCODE) { Write-Error "Test failed with exit code: $LASTEXITCODE"; exit 1 }
+          Write-Host "PASS: CPU SSE test completed"
+
+      - name: "B3: CPU Linpack Test (10s)"
+        shell: pwsh
+        run: |
+          $exe = (Get-ChildItem -Path build -Recurse -Filter "occt_native.exe" | Select-Object -First 1).FullName
+          Write-Host "=== CPU Linpack Test (10 seconds) ==="
+          & $exe --cli --test cpu --mode linpack --duration 10
+          if ($LASTEXITCODE) { Write-Error "Test failed with exit code: $LASTEXITCODE"; exit 1 }
+          Write-Host "PASS: CPU Linpack test completed"
+
+      - name: "B4: CPU Prime Test (10s)"
+        shell: pwsh
+        run: |
+          $exe = (Get-ChildItem -Path build -Recurse -Filter "occt_native.exe" | Select-Object -First 1).FullName
+          Write-Host "=== CPU Prime Test (10 seconds) ==="
+          & $exe --cli --test cpu --mode prime --duration 10
+          if ($LASTEXITCODE) { Write-Error "Test failed with exit code: $LASTEXITCODE"; exit 1 }
+          Write-Host "PASS: CPU Prime test completed"
+
+      - name: "B5: CPU AVX-512 Test (10s, may not be available)"
+        shell: pwsh
+        run: |
+          $exe = (Get-ChildItem -Path build -Recurse -Filter "occt_native.exe" | Select-Object -First 1).FullName
+          Write-Host "=== CPU AVX-512 Test (10 seconds) ==="
+          & $exe --cli --test cpu --mode avx512 --duration 10
+          $ec = if ($null -eq $LASTEXITCODE) { 0 } else { $LASTEXITCODE }
+          if ($ec -eq 0) {
+            Write-Host "PASS: CPU AVX-512 test completed successfully"
+          } elseif ($ec -eq 2) {
+            Write-Host "PASS: AVX-512 not available on this runner (exit code 2 is acceptable)"
+          } else {
+            Write-Error "Test failed with unexpected exit code: $ec"
+            exit 1
+          }
+
+      - name: "B6: CPU All Modes Test (10s)"
+        shell: pwsh
+        run: |
+          $exe = (Get-ChildItem -Path build -Recurse -Filter "occt_native.exe" | Select-Object -First 1).FullName
+          Write-Host "=== CPU All Modes Test (10 seconds) ==="
+          & $exe --cli --test cpu --mode all --duration 10
+          if ($LASTEXITCODE) { Write-Error "Test failed with exit code: $LASTEXITCODE"; exit 1 }
+          Write-Host "PASS: CPU All Modes test completed"
+
+      - name: "B7: CPU Variable Load Pattern (10s)"
+        shell: pwsh
+        run: |
+          $exe = (Get-ChildItem -Path build -Recurse -Filter "occt_native.exe" | Select-Object -First 1).FullName
+          Write-Host "=== CPU Variable Load Pattern Test (10 seconds) ==="
+          & $exe --cli --test cpu --mode avx2 --load-pattern variable --duration 10
+          if ($LASTEXITCODE) { Write-Error "Test failed with exit code: $LASTEXITCODE"; exit 1 }
+          Write-Host "PASS: CPU Variable Load Pattern test completed"
+
+      - name: "B8: CPU SSE Fixed 2 Threads (10s)"
+        shell: pwsh
+        run: |
+          $exe = (Get-ChildItem -Path build -Recurse -Filter "occt_native.exe" | Select-Object -First 1).FullName
+          Write-Host "=== CPU SSE Test (10 seconds, 2 threads) ==="
+          & $exe --cli --test cpu --mode sse --threads 2 --duration 10
+          if ($LASTEXITCODE) { Write-Error "Test failed with exit code: $LASTEXITCODE"; exit 1 }
+          Write-Host "PASS: CPU SSE 2-thread test completed"
+
+      - name: "B9: CPU Cache Only Test (10s)"
+        shell: pwsh
+        run: |
+          $exe = (Get-ChildItem -Path build -Recurse -Filter "occt_native.exe" | Select-Object -First 1).FullName
+          Write-Host "=== CPU Cache Only Test (10 seconds) ==="
+          & $exe --cli --test cpu --mode cache --duration 10
+          if ($LASTEXITCODE) { Write-Error "Test failed with exit code: $LASTEXITCODE"; exit 1 }
+          Write-Host "PASS: CPU Cache Only test completed"
+
+      - name: "B10: CPU Large Data Set Test (10s)"
+        shell: pwsh
+        run: |
+          $exe = (Get-ChildItem -Path build -Recurse -Filter "occt_native.exe" | Select-Object -First 1).FullName
+          Write-Host "=== CPU Large Data Set Test (10 seconds) ==="
+          & $exe --cli --test cpu --mode large_data --duration 10
+          if ($LASTEXITCODE) { Write-Error "Test failed with exit code: $LASTEXITCODE"; exit 1 }
+          Write-Host "PASS: CPU Large Data Set test completed"
+
+      - name: "B11: CPU Core Cycling Load Pattern (10s)"
+        shell: pwsh
+        run: |
+          $exe = (Get-ChildItem -Path build -Recurse -Filter "occt_native.exe" | Select-Object -First 1).FullName
+          Write-Host "=== CPU Core Cycling Load Pattern Test (10 seconds) ==="
+          & $exe --cli --test cpu --mode avx2 --load-pattern core_cycling --duration 10
+          if ($LASTEXITCODE) { Write-Error "Test failed with exit code: $LASTEXITCODE"; exit 1 }
+          Write-Host "PASS: CPU Core Cycling test completed"
+
+      - name: "B12: CPU AVX Float Test (10s)"
+        shell: pwsh
+        run: |
+          $exe = (Get-ChildItem -Path build -Recurse -Filter "occt_native.exe" | Select-Object -First 1).FullName
+          Write-Host "=== CPU AVX Float Test (10 seconds) ==="
+          & $exe --cli --test cpu --mode avx --duration 10
+          if ($LASTEXITCODE) { Write-Error "Test failed with exit code: $LASTEXITCODE"; exit 1 }
+          Write-Host "PASS: CPU AVX Float test completed"
+
+      - name: "B13: CPU Auto Mode Test (10s)"
+        shell: pwsh
+        run: |
+          $exe = (Get-ChildItem -Path build -Recurse -Filter "occt_native.exe" | Select-Object -First 1).FullName
+          Write-Host "=== CPU Auto Mode Test (10 seconds) ==="
+          & $exe --cli --test cpu --mode auto --duration 10
+          if ($LASTEXITCODE) { Write-Error "Test failed with exit code: $LASTEXITCODE"; exit 1 }
+          Write-Host "PASS: CPU Auto Mode test completed"
+
+      # ════════════════════════════════════════════════════════════════════
+      # C. RAM Tests (all 6 patterns, 1 pass, 5% memory)
+      # ════════════════════════════════════════════════════════════════════
+
+      - name: "C1: RAM March C- Test (1 pass, 5%)"
+        shell: pwsh
+        run: |
+          $exe = (Get-ChildItem -Path build -Recurse -Filter "occt_native.exe" | Select-Object -First 1).FullName
+          Write-Host "=== RAM March C- Test ==="
+          & $exe --cli --test ram --mode march_c --memory 5 --passes 1
+          if ($LASTEXITCODE) { Write-Error "Test failed with exit code: $LASTEXITCODE"; exit 1 }
+          Write-Host "PASS: RAM March C- test completed"
+
+      - name: "C2: RAM Walking Ones Test (1 pass, 5%)"
+        shell: pwsh
+        run: |
+          $exe = (Get-ChildItem -Path build -Recurse -Filter "occt_native.exe" | Select-Object -First 1).FullName
+          Write-Host "=== RAM Walking Ones Test ==="
+          & $exe --cli --test ram --mode walking --memory 5 --passes 1
+          if ($LASTEXITCODE) { Write-Error "Test failed with exit code: $LASTEXITCODE"; exit 1 }
+          Write-Host "PASS: RAM Walking Ones test completed"
+
+      - name: "C3: RAM Walking Zeros Test (1 pass, 5%)"
+        shell: pwsh
+        run: |
+          $exe = (Get-ChildItem -Path build -Recurse -Filter "occt_native.exe" | Select-Object -First 1).FullName
+          Write-Host "=== RAM Walking Zeros Test ==="
+          & $exe --cli --test ram --mode walking_zeros --memory 5 --passes 1
+          if ($LASTEXITCODE) { Write-Error "Test failed with exit code: $LASTEXITCODE"; exit 1 }
+          Write-Host "PASS: RAM Walking Zeros test completed"
+
+      - name: "C4: RAM Checkerboard Test (1 pass, 5%)"
+        shell: pwsh
+        run: |
+          $exe = (Get-ChildItem -Path build -Recurse -Filter "occt_native.exe" | Select-Object -First 1).FullName
+          Write-Host "=== RAM Checkerboard Test ==="
+          & $exe --cli --test ram --mode checkerboard --memory 5 --passes 1
+          if ($LASTEXITCODE) { Write-Error "Test failed with exit code: $LASTEXITCODE"; exit 1 }
+          Write-Host "PASS: RAM Checkerboard test completed"
+
+      - name: "C5: RAM Random Test (1 pass, 5%)"
+        shell: pwsh
+        run: |
+          $exe = (Get-ChildItem -Path build -Recurse -Filter "occt_native.exe" | Select-Object -First 1).FullName
+          Write-Host "=== RAM Random Test ==="
+          & $exe --cli --test ram --mode random --memory 5 --passes 1
+          if ($LASTEXITCODE) { Write-Error "Test failed with exit code: $LASTEXITCODE"; exit 1 }
+          Write-Host "PASS: RAM Random test completed"
+
+      - name: "C6: RAM Bandwidth Test (1 pass, 5%)"
+        shell: pwsh
+        run: |
+          $exe = (Get-ChildItem -Path build -Recurse -Filter "occt_native.exe" | Select-Object -First 1).FullName
+          Write-Host "=== RAM Bandwidth Test ==="
+          & $exe --cli --test ram --mode bandwidth --memory 5 --passes 1
+          if ($LASTEXITCODE) { Write-Error "Test failed with exit code: $LASTEXITCODE"; exit 1 }
+          Write-Host "PASS: RAM Bandwidth test completed"
+
+      # ════════════════════════════════════════════════════════════════════
+      # D. Storage Tests (all 5 modes, 64MB, 10s)
+      # ════════════════════════════════════════════════════════════════════
+
+      - name: "D1: Storage Sequential Write (64MB, 10s)"
+        shell: pwsh
+        run: |
+          $exe = (Get-ChildItem -Path build -Recurse -Filter "occt_native.exe" | Select-Object -First 1).FullName
+          Write-Host "=== Storage Sequential Write Test ==="
+          & $exe --cli --test storage --mode write --file-size 64 --queue-depth 4 --duration 10
+          if ($LASTEXITCODE) { Write-Error "Test failed with exit code: $LASTEXITCODE"; exit 1 }
+          Write-Host "PASS: Storage Sequential Write test completed"
+
+      - name: "D2: Storage Sequential Read (64MB, 10s)"
+        shell: pwsh
+        run: |
+          $exe = (Get-ChildItem -Path build -Recurse -Filter "occt_native.exe" | Select-Object -First 1).FullName
+          Write-Host "=== Storage Sequential Read Test ==="
+          & $exe --cli --test storage --mode read --file-size 64 --queue-depth 4 --duration 10
+          if ($LASTEXITCODE) { Write-Error "Test failed with exit code: $LASTEXITCODE"; exit 1 }
+          Write-Host "PASS: Storage Sequential Read test completed"
+
+      - name: "D3: Storage Random Write (64MB, 10s)"
+        shell: pwsh
+        run: |
+          $exe = (Get-ChildItem -Path build -Recurse -Filter "occt_native.exe" | Select-Object -First 1).FullName
+          Write-Host "=== Storage Random Write Test ==="
+          & $exe --cli --test storage --mode random_write --file-size 64 --queue-depth 4 --duration 10
+          if ($LASTEXITCODE) { Write-Error "Test failed with exit code: $LASTEXITCODE"; exit 1 }
+          Write-Host "PASS: Storage Random Write test completed"
+
+      - name: "D4: Storage Random Read (64MB, 10s)"
+        shell: pwsh
+        run: |
+          $exe = (Get-ChildItem -Path build -Recurse -Filter "occt_native.exe" | Select-Object -First 1).FullName
+          Write-Host "=== Storage Random Read Test ==="
+          & $exe --cli --test storage --mode random_read --file-size 64 --queue-depth 4 --duration 10
+          if ($LASTEXITCODE) { Write-Error "Test failed with exit code: $LASTEXITCODE"; exit 1 }
+          Write-Host "PASS: Storage Random Read test completed"
+
+      - name: "D5: Storage Mixed I/O (64MB, QD8, 10s)"
+        shell: pwsh
+        run: |
+          $exe = (Get-ChildItem -Path build -Recurse -Filter "occt_native.exe" | Select-Object -First 1).FullName
+          Write-Host "=== Storage Mixed I/O Test ==="
+          & $exe --cli --test storage --mode mixed --file-size 64 --queue-depth 8 --duration 10
+          if ($LASTEXITCODE) { Write-Error "Test failed with exit code: $LASTEXITCODE"; exit 1 }
+          Write-Host "PASS: Storage Mixed I/O test completed"
+
+      - name: "D6: Storage Verify Sequential (64MB)"
+        shell: pwsh
+        run: |
+          $exe = (Get-ChildItem -Path build -Recurse -Filter "occt_native.exe" | Select-Object -First 1).FullName
+          Write-Host "=== Storage Verify Sequential Test ==="
+          & $exe --cli --test storage --mode verify_seq --file-size 64 --duration 15
+          if ($LASTEXITCODE) { Write-Error "Test failed with exit code: $LASTEXITCODE"; exit 1 }
+          Write-Host "PASS: Storage Verify Sequential test completed"
+
+      - name: "D7: Storage Verify Random (64MB)"
+        shell: pwsh
+        run: |
+          $exe = (Get-ChildItem -Path build -Recurse -Filter "occt_native.exe" | Select-Object -First 1).FullName
+          Write-Host "=== Storage Verify Random Test ==="
+          & $exe --cli --test storage --mode verify_rand --file-size 64 --duration 15
+          if ($LASTEXITCODE) { Write-Error "Test failed with exit code: $LASTEXITCODE"; exit 1 }
+          Write-Host "PASS: Storage Verify Random test completed"
+
+      - name: "D8: Storage Fill & Verify (64MB)"
+        shell: pwsh
+        run: |
+          $exe = (Get-ChildItem -Path build -Recurse -Filter "occt_native.exe" | Select-Object -First 1).FullName
+          Write-Host "=== Storage Fill & Verify Test ==="
+          & $exe --cli --test storage --mode fill_verify --file-size 64 --duration 20
+          if ($LASTEXITCODE) { Write-Error "Test failed with exit code: $LASTEXITCODE"; exit 1 }
+          Write-Host "PASS: Storage Fill & Verify test completed"
+
+      - name: "D9: Storage Butterfly Verify (64MB)"
+        shell: pwsh
+        run: |
+          $exe = (Get-ChildItem -Path build -Recurse -Filter "occt_native.exe" | Select-Object -First 1).FullName
+          Write-Host "=== Storage Butterfly Verify Test ==="
+          & $exe --cli --test storage --mode butterfly --file-size 64 --duration 15
+          if ($LASTEXITCODE) { Write-Error "Test failed with exit code: $LASTEXITCODE"; exit 1 }
+          Write-Host "PASS: Storage Butterfly Verify test completed"
+
+      # ════════════════════════════════════════════════════════════════════
+      # E. Benchmark Tests
+      # ════════════════════════════════════════════════════════════════════
+
+      - name: "E1: Benchmark Cache"
+        shell: pwsh
+        run: |
+          $exe = (Get-ChildItem -Path build -Recurse -Filter "occt_native.exe" | Select-Object -First 1).FullName
+          Write-Host "=== Cache Benchmark ==="
+          & $exe --cli --test benchmark --mode cache
+          if ($LASTEXITCODE) { Write-Error "Test failed with exit code: $LASTEXITCODE"; exit 1 }
+          Write-Host "PASS: Cache Benchmark completed"
+
+      - name: "E2: Benchmark Memory"
+        shell: pwsh
+        run: |
+          $exe = (Get-ChildItem -Path build -Recurse -Filter "occt_native.exe" | Select-Object -First 1).FullName
+          Write-Host "=== Memory Benchmark ==="
+          & $exe --cli --test benchmark --mode memory
+          if ($LASTEXITCODE) { Write-Error "Test failed with exit code: $LASTEXITCODE"; exit 1 }
+          Write-Host "PASS: Memory Benchmark completed"
+
+      - name: "E3: Benchmark All"
+        shell: pwsh
+        run: |
+          $exe = (Get-ChildItem -Path build -Recurse -Filter "occt_native.exe" | Select-Object -First 1).FullName
+          Write-Host "=== All Benchmarks ==="
+          & $exe --cli --test benchmark --mode all
+          if ($LASTEXITCODE) { Write-Error "Test failed with exit code: $LASTEXITCODE"; exit 1 }
+          Write-Host "PASS: All Benchmarks completed"
+
+      # ════════════════════════════════════════════════════════════════════
+      # F. GPU Graceful Failure Test (CI has no GPU)
+      # ════════════════════════════════════════════════════════════════════
+
+      - name: "F1: GPU Test (no GPU in CI, accept 0 or 2)"
+        shell: pwsh
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $false
+          $exe = (Get-ChildItem -Path build -Recurse -Filter "occt_native.exe" | Select-Object -First 1).FullName
+          Write-Host "=== GPU Test (no GPU hardware, accept exit 0 or 2) ==="
+          & $exe --cli --test gpu --mode matrix_mul --duration 5
+          $ec = if ($null -eq $LASTEXITCODE) { 0 } else { $LASTEXITCODE }
+          if ($ec -eq 0 -or $ec -eq 2) {
+            Write-Host "PASS: GPU test handled gracefully (exit code: $ec)"
+            exit 0
+          } else {
+            Write-Error "GPU test failed unexpectedly with exit code: $ec"
+            exit 1
+          }
+
+      # ════════════════════════════════════════════════════════════════════
+      # G. PSU Graceful Failure Test (depends on GPU)
+      # ════════════════════════════════════════════════════════════════════
+
+      - name: "G1: PSU Test (no GPU in CI, accept 0 or 2)"
+        shell: pwsh
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $false
+          $exe = (Get-ChildItem -Path build -Recurse -Filter "occt_native.exe" | Select-Object -First 1).FullName
+          Write-Host "=== PSU Test (no GPU hardware, accept exit 0 or 2) ==="
+          & $exe --cli --test psu --mode steady --duration 5
+          $ec = if ($null -eq $LASTEXITCODE) { 0 } else { $LASTEXITCODE }
+          if ($ec -eq 0 -or $ec -eq 2) {
+            Write-Host "PASS: PSU test handled gracefully (exit code: $ec)"
+            exit 0
+          } else {
+            Write-Error "PSU test failed unexpectedly with exit code: $ec"
+            exit 1
+          }
+
+      # ════════════════════════════════════════════════════════════════════
+      # H. Monitor Tests
+      # ════════════════════════════════════════════════════════════════════
+
+      - name: "H1: Monitor-Only (5s)"
+        shell: pwsh
+        run: |
+          $exe = (Get-ChildItem -Path build -Recurse -Filter "occt_native.exe" | Select-Object -First 1).FullName
+          Write-Host "=== Monitor-Only Test (5 seconds) ==="
+          & $exe --cli --monitor-only --duration 5
+          if ($LASTEXITCODE) { Write-Error "Test failed with exit code: $LASTEXITCODE"; exit 1 }
+          Write-Host "PASS: Monitor-Only test completed"
+
+      - name: "H2: Monitor-Only with CSV Output (5s)"
+        shell: pwsh
+        run: |
+          $exe = (Get-ChildItem -Path build -Recurse -Filter "occt_native.exe" | Select-Object -First 1).FullName
+          Write-Host "=== Monitor-Only Test with CSV Output (5 seconds) ==="
+          & $exe --cli --monitor-only --duration 5 --output monitor_output.csv
+          if ($LASTEXITCODE) { Write-Error "Test failed with exit code: $LASTEXITCODE"; exit 1 }
+          if (Test-Path "monitor_output.csv") {
+            $size = (Get-Item "monitor_output.csv").Length
+            Write-Host "monitor_output.csv size: $([math]::Round($size / 1KB, 1)) KB"
+          } else {
+            Write-Warning "monitor_output.csv was not created (sensor init may have been skipped)"
+          }
+          Write-Host "PASS: Monitor-Only CSV test completed"
+
+      # ════════════════════════════════════════════════════════════════════
+      # I. Report Format Tests (short CPU SSE 5s)
+      # ════════════════════════════════════════════════════════════════════
+
+      - name: "I1: Report JSON Format"
+        shell: pwsh
+        run: |
+          $exe = (Get-ChildItem -Path build -Recurse -Filter "occt_native.exe" | Select-Object -First 1).FullName
+          Write-Host "=== CPU SSE Test with JSON Report ==="
+          & $exe --cli --test cpu --mode sse --duration 5 --report json --output test_results
+          if ($LASTEXITCODE) { Write-Error "Test failed with exit code: $LASTEXITCODE"; exit 1 }
+          Write-Host "PASS: JSON report generation completed"
+
+      - name: "I2: Report HTML Format"
+        shell: pwsh
+        run: |
+          $exe = (Get-ChildItem -Path build -Recurse -Filter "occt_native.exe" | Select-Object -First 1).FullName
+          Write-Host "=== CPU SSE Test with HTML Report ==="
+          & $exe --cli --test cpu --mode sse --duration 5 --report html --output test_results
+          if ($LASTEXITCODE) { Write-Error "Test failed with exit code: $LASTEXITCODE"; exit 1 }
+          Write-Host "PASS: HTML report generation completed"
+
+      - name: "I3: Report CSV Format"
+        shell: pwsh
+        run: |
+          $exe = (Get-ChildItem -Path build -Recurse -Filter "occt_native.exe" | Select-Object -First 1).FullName
+          Write-Host "=== CPU SSE Test with CSV Report ==="
+          & $exe --cli --test cpu --mode sse --duration 5 --report csv --output test_results
+          if ($LASTEXITCODE) { Write-Error "Test failed with exit code: $LASTEXITCODE"; exit 1 }
+          Write-Host "PASS: CSV report generation completed"
+
+      - name: "I4: Direct CSV Shorthand (--csv)"
+        shell: pwsh
+        run: |
+          $exe = (Get-ChildItem -Path build -Recurse -Filter "occt_native.exe" | Select-Object -First 1).FullName
+          Write-Host "=== CPU SSE Test with --csv shorthand ==="
+          & $exe --cli --test cpu --mode sse --duration 5 --csv test_results/direct.csv
+          if ($LASTEXITCODE) { Write-Error "Test failed with exit code: $LASTEXITCODE"; exit 1 }
+          Write-Host "PASS: Direct CSV shorthand completed"
+
+      # ════════════════════════════════════════════════════════════════════
+      # J. Schedule Test
+      # ════════════════════════════════════════════════════════════════════
+
+      - name: "J1: Schedule Test (ci-schedule.json)"
+        shell: pwsh
+        run: |
+          $exe = (Get-ChildItem -Path build -Recurse -Filter "occt_native.exe" | Select-Object -First 1).FullName
+          Write-Host "=== Schedule Test ==="
+          & $exe --cli --schedule tests/ci-schedule.json
+          if ($LASTEXITCODE) { Write-Error "Test failed with exit code: $LASTEXITCODE"; exit 1 }
+          Write-Host "PASS: Schedule test completed"
+
+      # ════════════════════════════════════════════════════════════════════
+      # K. Certification Test (invalid tier - negative test)
+      # ════════════════════════════════════════════════════════════════════
+
+      - name: "K1: Certification Invalid Tier (expect error output)"
+        shell: pwsh
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $false
+          $exe = (Get-ChildItem -Path build -Recurse -Filter "occt_native.exe" | Select-Object -First 1).FullName
+          Write-Host "=== Certificate Invalid Tier Test ==="
+          $output = & $exe --cli --cert-tier invalid_tier 2>&1 | Out-String
+          Write-Host $output
+          if ($output -match '"type"\s*:\s*"error"') {
+            Write-Host "PASS: Invalid cert tier correctly produced error output"
+          } else {
+            Write-Error "Expected error JSON in output but not found"; exit 1
+          }
+          exit 0
+
+      # ════════════════════════════════════════════════════════════════════
+      # L. Error / Negative Tests (verify error JSON output)
+      # ════════════════════════════════════════════════════════════════════
+
+      - name: "L1: No --test Argument (expect error output)"
+        shell: pwsh
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $false
+          $exe = (Get-ChildItem -Path build -Recurse -Filter "occt_native.exe" | Select-Object -First 1).FullName
+          Write-Host "=== CLI with no --test argument ==="
+          $output = & $exe --cli 2>&1 | Out-String
+          Write-Host $output
+          if ($output -match '"type"\s*:\s*"error"') {
+            Write-Host "PASS: No-test correctly produced error output"
+          } else {
+            Write-Error "Expected error JSON in output but not found"; exit 1
+          }
+          exit 0
+
+      - name: "L2: Unknown Test Type (expect error output)"
+        shell: pwsh
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $false
+          $exe = (Get-ChildItem -Path build -Recurse -Filter "occt_native.exe" | Select-Object -First 1).FullName
+          Write-Host "=== Unknown test type 'foobar' ==="
+          $output = & $exe --cli --test foobar 2>&1 | Out-String
+          Write-Host $output
+          if ($output -match '"type"\s*:\s*"error"') {
+            Write-Host "PASS: Unknown test type correctly produced error output"
+          } else {
+            Write-Error "Expected error JSON in output but not found"; exit 1
+          }
+          exit 0
+
+      - name: "L3: Invalid Cert Tier (expect error output)"
+        shell: pwsh
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $false
+          $exe = (Get-ChildItem -Path build -Recurse -Filter "occt_native.exe" | Select-Object -First 1).FullName
+          Write-Host "=== Invalid cert tier 'unobtanium' ==="
+          $output = & $exe --cli --cert-tier unobtanium 2>&1 | Out-String
+          Write-Host $output
+          if ($output -match '"type"\s*:\s*"error"') {
+            Write-Host "PASS: Invalid cert tier correctly produced error output"
+          } else {
+            Write-Error "Expected error JSON in output but not found"; exit 1
+          }
+          exit 0
+
+      # ════════════════════════════════════════════════════════════════════
+      # M. Verify Test Outputs
+      # ════════════════════════════════════════════════════════════════════
+
+      - name: "M1: Verify test_results Directory Contains Files"
+        shell: pwsh
+        run: |
+          Write-Host "=== Verifying test_results directory ==="
+          if (-not (Test-Path "test_results")) {
+            Write-Error "test_results directory does not exist!"
+            exit 1
+          }
+          $files = Get-ChildItem -Path test_results -Recurse -File
+          if ($files.Count -eq 0) {
+            Write-Error "test_results directory is empty - no report files generated!"
+            exit 1
+          }
+          Write-Host "Found $($files.Count) file(s) in test_results:"
+          $files | ForEach-Object {
+            Write-Host "  $($_.Name) ($([math]::Round($_.Length / 1KB, 1)) KB)"
+          }
+          Write-Host "PASS: test_results directory verified"
+
+      - name: "M2: Verify monitor_output.csv Exists"
+        shell: pwsh
+        run: |
+          Write-Host "=== Verifying monitor_output.csv ==="
+          if (Test-Path "monitor_output.csv") {
+            $size = (Get-Item "monitor_output.csv").Length
+            Write-Host "monitor_output.csv size: $([math]::Round($size / 1KB, 1)) KB"
+            Write-Host "PASS: monitor_output.csv verified"
+          } else {
+            Write-Host "SKIP: monitor_output.csv not found (CI runner may lack hardware sensors)"
+          }
+
+      # ════════════════════════════════════════════════════════════════════
+      # N. JSON Output Validation (verify new fields exist and are valid)
+      # ════════════════════════════════════════════════════════════════════
+
+      - name: "N1: CPU JSON Field Validation"
+        shell: pwsh
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $false
+          $exe = (Get-ChildItem -Path build -Recurse -Filter "occt_native.exe" | Select-Object -First 1).FullName
+          Write-Host "=== CPU JSON Field Validation ==="
+          $output = & $exe --cli --test cpu --mode avx2 --duration 5 2>&1
+          $lines = $output -split "`n" | Where-Object { $_.Trim().StartsWith("{") }
+          $hasMetric = $false
+          $hasResult = $false
+          foreach ($line in $lines) {
+              try {
+                  $j = $line | ConvertFrom-Json
+                  if ($j.type -eq "metric") {
+                      $hasMetric = $true
+                      if (-not ($j.cpu.gflops -gt 0)) { Write-Error "gflops should be > 0, got: $($j.cpu.gflops)"; exit 1 }
+                      if (-not ($j.cpu.threads -gt 0)) { Write-Error "threads should be > 0, got: $($j.cpu.threads)"; exit 1 }
+                      if ($null -eq $j.cpu.error_count) { Write-Error "error_count field missing"; exit 1 }
+                  }
+                  if ($j.type -eq "result") {
+                      $hasResult = $true
+                  }
+              } catch {}
+          }
+          if (-not $hasMetric) { Write-Error "No metric events found in CPU JSON output"; exit 1 }
+          if (-not $hasResult) { Write-Error "No result event found in CPU JSON output"; exit 1 }
+          Write-Host "PASS: CPU JSON fields validated (metric + result events present, gflops > 0, threads > 0, error_count exists)"
+
+      - name: "N2: RAM JSON Field Validation"
+        shell: pwsh
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $false
+          $exe = (Get-ChildItem -Path build -Recurse -Filter "occt_native.exe" | Select-Object -First 1).FullName
+          Write-Host "=== RAM JSON Field Validation ==="
+          $output = & $exe --cli --test ram --mode march_c --memory 5 --passes 1 2>&1
+          $lines = $output -split "`n" | Where-Object { $_.Trim().StartsWith("{") }
+          $hasMetric = $false
+          $hasResult = $false
+          foreach ($line in $lines) {
+              try {
+                  $j = $line | ConvertFrom-Json
+                  if ($j.type -eq "metric") {
+                      $hasMetric = $true
+                      if ($null -eq $j.ram.pages_locked) { Write-Error "pages_locked field missing"; exit 1 }
+                      if ($null -eq $j.ram.errors) { Write-Error "errors field missing"; exit 1 }
+                  }
+                  if ($j.type -eq "result") {
+                      $hasResult = $true
+                  }
+              } catch {}
+          }
+          if (-not $hasMetric) { Write-Error "No metric events found in RAM JSON output"; exit 1 }
+          if (-not $hasResult) { Write-Error "No result event found in RAM JSON output"; exit 1 }
+          Write-Host "PASS: RAM JSON fields validated (pages_locked, errors fields present)"
+
+      - name: "N3: Storage JSON Error Stats Validation"
+        shell: pwsh
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $false
+          $exe = (Get-ChildItem -Path build -Recurse -Filter "occt_native.exe" | Select-Object -First 1).FullName
+          Write-Host "=== Storage JSON Error Stats Validation ==="
+          $output = & $exe --cli --test storage --mode write --file-size 32 --duration 5 2>&1
+          $lines = $output -split "`n" | Where-Object { $_.Trim().StartsWith("{") }
+          $hasMetric = $false
+          $hasResult = $false
+          foreach ($line in $lines) {
+              try {
+                  $j = $line | ConvertFrom-Json
+                  if ($j.type -eq "metric") {
+                      $hasMetric = $true
+                      # verify_errors and related fields are only present when > 0
+                      # On a healthy system they should be 0 (absent), which is fine
+                      # We just verify the metric event has basic storage fields
+                      if ($null -eq $j.storage.read_mbps -and $null -eq $j.storage.write_mbps) {
+                          Write-Error "Storage metric missing read_mbps/write_mbps"; exit 1
+                      }
+                  }
+                  if ($j.type -eq "result") {
+                      $hasResult = $true
+                  }
+              } catch {}
+          }
+          if (-not $hasMetric) { Write-Error "No metric events found in Storage JSON output"; exit 1 }
+          if (-not $hasResult) { Write-Error "No result event found in Storage JSON output"; exit 1 }
+          Write-Host "PASS: Storage JSON fields validated (metric events with I/O stats present)"
+
+      - name: "N4: PSU JSON Power Stability Validation"
+        shell: pwsh
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $false
+          $exe = (Get-ChildItem -Path build -Recurse -Filter "occt_native.exe" | Select-Object -First 1).FullName
+          Write-Host "=== PSU JSON Power Stability Validation ==="
+          $output = & $exe --cli --test psu --mode steady --duration 5 2>&1
+          $lines = $output -split "`n" | Where-Object { $_.Trim().StartsWith("{") }
+          $hasMetric = $false
+          $hasResult = $false
+          foreach ($line in $lines) {
+              try {
+                  $j = $line | ConvertFrom-Json
+                  if ($j.type -eq "metric") {
+                      $hasMetric = $true
+                      if ($null -eq $j.psu.power_stability_pct) { Write-Error "power_stability_pct field missing"; exit 1 }
+                      if ($null -eq $j.psu.health_status) { Write-Error "health_status field missing"; exit 1 }
+                      $validStatuses = @("HEALTHY", "MARGINAL", "UNSTABLE", "FAILED")
+                      if ($j.psu.health_status -notin $validStatuses) {
+                          Write-Error "health_status '$($j.psu.health_status)' not in valid set: $($validStatuses -join ', ')"
+                          exit 1
+                      }
+                  }
+                  if ($j.type -eq "result") {
+                      $hasResult = $true
+                  }
+              } catch {}
+          }
+          # PSU test may exit 2 if no GPU available, so metric events may not appear
+          if ($hasMetric) {
+              Write-Host "PASS: PSU JSON fields validated (power_stability_pct, health_status present and valid)"
+          } else {
+              Write-Host "SKIP: No PSU metric events (GPU likely unavailable in CI), but no crash occurred"
+          }
+
+      - name: "N5: CPU Prime JSON Validation"
+        shell: pwsh
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $false
+          $exe = (Get-ChildItem -Path build -Recurse -Filter "occt_native.exe" | Select-Object -First 1).FullName
+          Write-Host "=== CPU Prime JSON Validation ==="
+          $output = & $exe --cli --test cpu --mode prime --duration 5 2>&1
+          $lines = $output -split "`n" | Where-Object { $_.Trim().StartsWith("{") }
+          $hasMetric = $false
+          $hasResult = $false
+          foreach ($line in $lines) {
+              try {
+                  $j = $line | ConvertFrom-Json
+                  if ($j.type -eq "metric") {
+                      $hasMetric = $true
+                      if ($null -eq $j.cpu.error_count) { Write-Error "error_count field missing in prime metric"; exit 1 }
+                  }
+                  if ($j.type -eq "result") {
+                      $hasResult = $true
+                  }
+              } catch {}
+          }
+          if (-not $hasMetric) { Write-Error "No metric events found in CPU Prime JSON output"; exit 1 }
+          if (-not $hasResult) { Write-Error "No result event found in CPU Prime JSON output"; exit 1 }
+          Write-Host "PASS: CPU Prime JSON fields validated (metric events with error_count present)"
+
+      # ════════════════════════════════════════════════════════════════════
+      # Upload & Summary (always run)
+      # ════════════════════════════════════════════════════════════════════
+
+      - name: Upload Test Results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cli-test-results
+          path: |
+            test_results/
+            monitor_output.csv
+          if-no-files-found: warn
+          retention-days: 90
+
+      - name: Test Summary
+        if: always()
+        shell: pwsh
+        run: |
+          Write-Host ""
+          Write-Host "+==========================================================+"
+          Write-Host "|  Windows CLI Comprehensive Test Summary                   |"
+          Write-Host "+==========================================================+"
+          Write-Host "|  Platform:   Windows x64 (GitHub Actions)                 |"
+          Write-Host "|  Compiler:   MSVC 2022                                    |"
+          Write-Host "|  Qt Version: ${{ env.QT_VERSION }}                                    |"
+          Write-Host "|                                                           |"
+          Write-Host "|  A. Basic Tests (2)                                       |"
+          Write-Host "|     A1: --version    A2: --help                           |"
+          Write-Host "|                                                           |"
+          Write-Host "|  B. CPU Tests (13)                                        |"
+          Write-Host "|     B1: AVX2         B2: SSE          B3: Linpack         |"
+          Write-Host "|     B4: Prime        B5: AVX-512*     B6: All Modes       |"
+          Write-Host "|     B7: Variable LP  B8: SSE 2-thread B9: Cache Only      |"
+          Write-Host "|     B10: Large Data  B11: Core Cycling                    |"
+          Write-Host "|     B12: AVX Float   B13: Auto Mode                       |"
+          Write-Host "|                                                           |"
+          Write-Host "|  C. RAM Tests (6)                                         |"
+          Write-Host "|     C1: March C-     C2: Walking Ones C3: Walking Zeros   |"
+          Write-Host "|     C4: Checkerboard C5: Random       C6: Bandwidth       |"
+          Write-Host "|                                                           |"
+          Write-Host "|  D. Storage Tests (9)                                     |"
+          Write-Host "|     D1: Seq Write    D2: Seq Read     D3: Random Write    |"
+          Write-Host "|     D4: Random Read  D5: Mixed I/O    D6: Verify Seq      |"
+          Write-Host "|     D7: Verify Rand  D8: Fill&Verify  D9: Butterfly       |"
+          Write-Host "|                                                           |"
+          Write-Host "|  E. Benchmark Tests (3)                                   |"
+          Write-Host "|     E1: Cache        E2: Memory       E3: All             |"
+          Write-Host "|                                                           |"
+          Write-Host "|  F. GPU Graceful Failure (1)                              |"
+          Write-Host "|     F1: matrix_mul (expect exit 2)                        |"
+          Write-Host "|                                                           |"
+          Write-Host "|  G. PSU Graceful Failure (1)                              |"
+          Write-Host "|     G1: steady (expect exit 2)                            |"
+          Write-Host "|                                                           |"
+          Write-Host "|  H. Monitor Tests (2)                                     |"
+          Write-Host "|     H1: Monitor-Only H2: Monitor CSV                      |"
+          Write-Host "|                                                           |"
+          Write-Host "|  I. Report Format Tests (4)                               |"
+          Write-Host "|     I1: JSON         I2: HTML         I3: CSV             |"
+          Write-Host "|     I4: --csv shorthand                                   |"
+          Write-Host "|                                                           |"
+          Write-Host "|  J. Schedule Test (1)                                     |"
+          Write-Host "|     J1: ci-schedule.json                                  |"
+          Write-Host "|                                                           |"
+          Write-Host "|  K. Certification Test (1)                                |"
+          Write-Host "|     K1: Invalid tier (expect exit 2)                      |"
+          Write-Host "|                                                           |"
+          Write-Host "|  L. Error/Negative Tests (3)                              |"
+          Write-Host "|     L1: No --test    L2: Unknown type L3: Bad cert tier   |"
+          Write-Host "|                                                           |"
+          Write-Host "|  M. Verify Outputs (2)                                    |"
+          Write-Host "|     M1: test_results dir  M2: monitor_output.csv          |"
+          Write-Host "|                                                           |"
+          Write-Host "|  N. JSON Output Validation (5)                            |"
+          Write-Host "|     N1: CPU JSON     N2: RAM JSON     N3: Storage JSON    |"
+          Write-Host "|     N4: PSU JSON     N5: CPU Prime JSON                   |"
+          Write-Host "|                                                           |"
+          Write-Host "|  * AVX-512 accepts exit code 0 or 2 (runner may lack it)  |"
+          Write-Host "|                                                           |"
+          Write-Host "|  Total: 51 test steps                                     |"
+          Write-Host "+==========================================================+"

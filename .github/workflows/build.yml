@@ -1,0 +1,115 @@
+name: Build OCCT Native
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+env:
+  BUILD_TYPE: Release
+  QT_VERSION: '6.8.2'
+
+jobs:
+  build-windows:
+    name: Windows MSVC Build
+    runs-on: windows-latest
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Install Qt6
+      uses: jurplel/install-qt-action@v4
+      with:
+        version: ${{ env.QT_VERSION }}
+        host: windows
+        target: desktop
+        arch: win64_msvc2022_64
+        modules: 'qtcharts'
+        cache: true
+
+    - name: Setup .NET 8 SDK
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: '8.0.x'
+
+    - name: Build LHM Sensor Reader
+      run: |
+        dotnet publish tools/lhm-sensor-reader/lhm-sensor-reader.csproj `
+          -c Release -r win-x64 --self-contained true `
+          -p:PublishSingleFile=true -p:PublishTrimmed=true -p:TrimMode=partial `
+          -o build/Release/tools
+
+    - name: Configure CMake
+      run: >
+        cmake -B build
+        -G "Visual Studio 17 2022"
+        -A x64
+        -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }}
+        -DCMAKE_PREFIX_PATH="${{ env.Qt6_DIR }}"
+
+    - name: Build
+      run: cmake --build build --config ${{ env.BUILD_TYPE }} --parallel
+
+    - name: Verify Build Output
+      shell: pwsh
+      run: |
+        $exe = Get-ChildItem -Path build -Recurse -Filter "occt_native.exe" | Select-Object -First 1
+        if ($exe) {
+          Write-Host "Found: $($exe.FullName)"
+          Write-Host "Size: $([math]::Round($exe.Length / 1MB, 2)) MB"
+        } else {
+          Write-Error "occt_native.exe not found!"
+          exit 1
+        }
+
+    - name: Deploy Qt Dependencies
+      shell: pwsh
+      run: |
+        $exe = "build/${{ env.BUILD_TYPE }}/occt_native.exe"
+        & windeployqt --release --no-translations --no-opengl-sw $exe
+        Write-Host "Qt dependencies deployed to: build/${{ env.BUILD_TYPE }}/"
+
+    - name: Upload Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: occt-native-windows
+        path: build/${{ env.BUILD_TYPE }}/
+        if-no-files-found: warn
+        retention-days: 30
+
+  build-linux:
+    name: Linux GCC Build
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Install Dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          cmake ninja-build \
+          qt6-base-dev libqt6charts6-dev \
+          libgl1-mesa-dev
+
+    - name: Configure CMake
+      run: >
+        cmake -B build
+        -G Ninja
+        -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }}
+        -DCMAKE_C_COMPILER=gcc
+        -DCMAKE_CXX_COMPILER=g++
+
+    - name: Build
+      run: cmake --build build --parallel $(nproc)
+
+    - name: Upload Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: occt-native-linux
+        path: build/occt_native
+        if-no-files-found: warn
+        retention-days: 30

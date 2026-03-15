@@ -1,0 +1,374 @@
+# ============================================================================
+# OCCT Native Stress Test - GPU/PSU Test Pipeline (Self-Hosted Runner)
+# ============================================================================
+# Requires a self-hosted Windows runner with GPU, labeled: [self-hosted, Windows, gpu]
+#
+# Triggers:
+#   - On push to main -> runs all GPU/PSU tests
+#   - On manual workflow_dispatch -> configurable duration and modes
+#
+# Prerequisites on runner PC:
+#   - GPU with latest driver (OpenCL.dll included)
+#   - Vulkan SDK (https://vulkan.lunarg.com/)
+#   - Visual Studio 2022 Build Tools
+#   - CMake 3.21+
+# ============================================================================
+
+name: GPU & PSU Stress Tests
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      test_duration:
+        description: 'Test duration per step (seconds)'
+        required: false
+        default: '30'
+        type: string
+      skip_opencl:
+        description: 'Skip OpenCL tests'
+        required: false
+        default: false
+        type: boolean
+      skip_vulkan:
+        description: 'Skip Vulkan tests'
+        required: false
+        default: false
+        type: boolean
+      skip_psu:
+        description: 'Skip PSU tests'
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  actions: write
+  contents: read
+
+env:
+  BUILD_TYPE: Release
+  QT_VERSION: '6.8.2'
+  TEST_DURATION: ${{ github.event.inputs.test_duration || '30' }}
+
+jobs:
+  gpu-stress-test:
+    name: GPU & PSU Stress Tests (Self-Hosted)
+    runs-on: [self-hosted, Windows, gpu]
+    timeout-minutes: 60
+
+    steps:
+      # ── Cleanup old artifacts (keep max 5) ────────────────────────────
+      - name: Cleanup Old Artifacts
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const MAX_KEEP = 4;
+            const artifactName = 'gpu-test-results';
+            const { data } = await github.rest.actions.listArtifactsForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              name: artifactName,
+              per_page: 100,
+            });
+            const artifacts = data.artifacts
+              .filter(a => !a.expired)
+              .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+            if (artifacts.length >= MAX_KEEP) {
+              const toDelete = artifacts.slice(MAX_KEEP);
+              for (const art of toDelete) {
+                console.log(`Deleting artifact: ${art.name} #${art.id} (${art.created_at})`);
+                await github.rest.actions.deleteArtifact({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  artifact_id: art.id,
+                });
+              }
+              console.log(`Deleted ${toDelete.length} old artifact(s).`);
+            } else {
+              console.log(`Only ${artifacts.length} artifact(s) found. No cleanup needed.`);
+            }
+
+      # ── Checkout ────────────────────────────────────────────────────────
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # ── Install Qt6 ────────────────────────────────────────────────────
+      - name: Install Qt6
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: ${{ env.QT_VERSION }}
+          arch: win64_msvc2022_64
+          modules: 'qtcharts'
+          cache: true
+
+      # ── Configure CMake (with OpenCL + Vulkan) ─────────────────────────
+      - name: Configure CMake
+        run: >
+          cmake -B build
+          -G "Visual Studio 17 2022"
+          -A x64
+          -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }}
+          -DCMAKE_PREFIX_PATH="${{ env.Qt6_DIR }}"
+          -DOCCT_ENABLE_OPENCL=ON
+          -DOCCT_ENABLE_VULKAN=ON
+
+      # ── Build ───────────────────────────────────────────────────────────
+      - name: Build
+        run: cmake --build build --config ${{ env.BUILD_TYPE }} --parallel
+
+      # ── Verify Build Output ─────────────────────────────────────────────
+      - name: Verify Build Output
+        shell: pwsh
+        run: |
+          $exe = (Get-ChildItem -Path build -Recurse -Filter "occt_native.exe" | Select-Object -First 1).FullName
+          if (-not $exe) { Write-Error "occt_native.exe not found!"; exit 1 }
+          Write-Host "Found: $exe"
+
+      # ── GPU Environment Info ────────────────────────────────────────────
+      - name: GPU Environment Info
+        shell: pwsh
+        run: |
+          Write-Host "=== GPU Environment ==="
+          if (Get-Command nvidia-smi -ErrorAction SilentlyContinue) {
+            nvidia-smi --query-gpu=name,driver_version,memory.total,memory.free --format=csv,noheader
+          } else {
+            Write-Host "nvidia-smi not found (non-NVIDIA GPU or not in PATH)"
+          }
+          Write-Host ""
+          Write-Host "=== OpenCL ==="
+          if (Test-Path "$env:SystemRoot\System32\OpenCL.dll") {
+            Write-Host "OpenCL.dll: FOUND"
+          } else {
+            Write-Host "OpenCL.dll: NOT FOUND"
+          }
+          Write-Host ""
+          Write-Host "=== Vulkan ==="
+          if (Get-Command vulkaninfo -ErrorAction SilentlyContinue) {
+            vulkaninfo --summary 2>$null | Select-Object -First 20
+          } else {
+            Write-Host "vulkaninfo not found (Vulkan SDK may not be installed)"
+          }
+
+      # ── Create Output Directories ──────────────────────────────────────
+      - name: Create Output Directories
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path gpu_results -Force | Out-Null
+          New-Item -ItemType Directory -Path test_results -Force | Out-Null
+
+      # ════════════════════════════════════════════════════════════════════
+      # Phase 1: Basic GPU Verification (OpenCL)
+      # ════════════════════════════════════════════════════════════════════
+
+      - name: "GA1: GPU Matrix Multiply FP32"
+        if: ${{ github.event.inputs.skip_opencl != 'true' }}
+        shell: pwsh
+        run: |
+          $exe = (Get-ChildItem -Path build -Recurse -Filter "occt_native.exe" | Select-Object -First 1).FullName
+          Write-Host "=== GPU Matrix Multiply FP32 (${{ env.TEST_DURATION }}s) ==="
+          & $exe --cli --test gpu --mode matrix_mul --duration ${{ env.TEST_DURATION }} --report json --output gpu_results
+          if ($LASTEXITCODE -eq 1) { Write-Error "GPU test FAILED (hardware error detected)"; exit 1 }
+          if ($LASTEXITCODE -ge 2) { Write-Error "GPU init error (exit $LASTEXITCODE)"; exit 1 }
+          Write-Host "PASS: GPU Matrix FP32 completed"
+
+      - name: "GA2: GPU Matrix Multiply FP64"
+        if: ${{ github.event.inputs.skip_opencl != 'true' }}
+        shell: pwsh
+        run: |
+          $exe = (Get-ChildItem -Path build -Recurse -Filter "occt_native.exe" | Select-Object -First 1).FullName
+          Write-Host "=== GPU Matrix Multiply FP64 (${{ env.TEST_DURATION }}s) ==="
+          & $exe --cli --test gpu --mode fp64 --duration ${{ env.TEST_DURATION }}
+          if ($LASTEXITCODE -eq 1) { Write-Error "GPU test FAILED (hardware error detected)"; exit 1 }
+          if ($LASTEXITCODE -ge 2) { Write-Error "GPU init error (exit $LASTEXITCODE)"; exit 1 }
+          Write-Host "PASS: GPU Matrix FP64 completed"
+
+      # ════════════════════════════════════════════════════════════════════
+      # Phase 2: Compute-Intensive Tests (OpenCL)
+      # ════════════════════════════════════════════════════════════════════
+
+      - name: "GB1: GPU FMA Stress"
+        if: ${{ github.event.inputs.skip_opencl != 'true' }}
+        shell: pwsh
+        run: |
+          $exe = (Get-ChildItem -Path build -Recurse -Filter "occt_native.exe" | Select-Object -First 1).FullName
+          Write-Host "=== GPU FMA Stress (${{ env.TEST_DURATION }}s) ==="
+          & $exe --cli --test gpu --mode fma --duration ${{ env.TEST_DURATION }}
+          if ($LASTEXITCODE -eq 1) { Write-Error "GPU test FAILED"; exit 1 }
+          if ($LASTEXITCODE -ge 2) { Write-Error "GPU init error (exit $LASTEXITCODE)"; exit 1 }
+          Write-Host "PASS: GPU FMA completed"
+
+      - name: "GB2: GPU Trigonometric Stress"
+        if: ${{ github.event.inputs.skip_opencl != 'true' }}
+        shell: pwsh
+        run: |
+          $exe = (Get-ChildItem -Path build -Recurse -Filter "occt_native.exe" | Select-Object -First 1).FullName
+          Write-Host "=== GPU Trig Stress (${{ env.TEST_DURATION }}s) ==="
+          & $exe --cli --test gpu --mode trig --duration ${{ env.TEST_DURATION }}
+          if ($LASTEXITCODE -eq 1) { Write-Error "GPU test FAILED"; exit 1 }
+          if ($LASTEXITCODE -ge 2) { Write-Error "GPU init error (exit $LASTEXITCODE)"; exit 1 }
+          Write-Host "PASS: GPU Trig completed"
+
+      # ════════════════════════════════════════════════════════════════════
+      # Phase 3: VRAM Test
+      # ════════════════════════════════════════════════════════════════════
+
+      - name: "GC1: GPU VRAM Pattern Test"
+        if: ${{ github.event.inputs.skip_opencl != 'true' }}
+        shell: pwsh
+        run: |
+          $exe = (Get-ChildItem -Path build -Recurse -Filter "occt_native.exe" | Select-Object -First 1).FullName
+          Write-Host "=== GPU VRAM Test (${{ env.TEST_DURATION }}s) ==="
+          & $exe --cli --test gpu --mode vram --duration ${{ env.TEST_DURATION }}
+          if ($LASTEXITCODE -eq 1) { Write-Error "VRAM errors detected!"; exit 1 }
+          if ($LASTEXITCODE -ge 2) { Write-Error "GPU init error (exit $LASTEXITCODE)"; exit 1 }
+          Write-Host "PASS: VRAM test completed (no errors)"
+
+      # ════════════════════════════════════════════════════════════════════
+      # Phase 4: Mixed & Vulkan Tests
+      # ════════════════════════════════════════════════════════════════════
+
+      - name: "GD1: GPU Mixed Workload"
+        if: ${{ github.event.inputs.skip_opencl != 'true' }}
+        shell: pwsh
+        run: |
+          $exe = (Get-ChildItem -Path build -Recurse -Filter "occt_native.exe" | Select-Object -First 1).FullName
+          Write-Host "=== GPU Mixed Workload (${{ env.TEST_DURATION }}s) ==="
+          & $exe --cli --test gpu --mode mixed --duration ${{ env.TEST_DURATION }}
+          if ($LASTEXITCODE -eq 1) { Write-Error "GPU test FAILED"; exit 1 }
+          if ($LASTEXITCODE -ge 2) { Write-Error "GPU init error (exit $LASTEXITCODE)"; exit 1 }
+          Write-Host "PASS: GPU Mixed completed"
+
+      - name: "GD2: Vulkan 3D Rendering"
+        if: ${{ github.event.inputs.skip_vulkan != 'true' }}
+        shell: pwsh
+        run: |
+          $exe = (Get-ChildItem -Path build -Recurse -Filter "occt_native.exe" | Select-Object -First 1).FullName
+          Write-Host "=== Vulkan 3D Rendering (${{ env.TEST_DURATION }}s) ==="
+          & $exe --cli --test gpu --mode vulkan_3d --shader-complexity 3 --duration ${{ env.TEST_DURATION }}
+          if ($LASTEXITCODE -eq 1) { Write-Error "Vulkan test FAILED (artifacts detected)"; exit 1 }
+          if ($LASTEXITCODE -ge 2) { Write-Error "Vulkan init error (exit $LASTEXITCODE)"; exit 1 }
+          Write-Host "PASS: Vulkan 3D completed"
+
+      - name: "GD3: Vulkan Adaptive Load"
+        if: ${{ github.event.inputs.skip_vulkan != 'true' }}
+        shell: pwsh
+        run: |
+          $exe = (Get-ChildItem -Path build -Recurse -Filter "occt_native.exe" | Select-Object -First 1).FullName
+          Write-Host "=== Vulkan Adaptive Load (${{ env.TEST_DURATION }}s) ==="
+          & $exe --cli --test gpu --mode vulkan_adaptive --adaptive-mode variable --duration ${{ env.TEST_DURATION }}
+          if ($LASTEXITCODE -eq 1) { Write-Error "Vulkan adaptive test FAILED"; exit 1 }
+          if ($LASTEXITCODE -ge 2) { Write-Error "Vulkan init error (exit $LASTEXITCODE)"; exit 1 }
+          Write-Host "PASS: Vulkan Adaptive completed"
+
+      # ════════════════════════════════════════════════════════════════════
+      # Phase 5: PSU Tests (CPU + GPU simultaneous)
+      # ════════════════════════════════════════════════════════════════════
+
+      - name: "PE1: PSU Steady (CPU + GPU Max Load)"
+        if: ${{ github.event.inputs.skip_psu != 'true' }}
+        shell: pwsh
+        run: |
+          $exe = (Get-ChildItem -Path build -Recurse -Filter "occt_native.exe" | Select-Object -First 1).FullName
+          Write-Host "=== PSU Steady Load (${{ env.TEST_DURATION }}s) ==="
+          & $exe --cli --test psu --mode steady --duration ${{ env.TEST_DURATION }}
+          if ($LASTEXITCODE -eq 1) { Write-Error "PSU test FAILED"; exit 1 }
+          if ($LASTEXITCODE -ge 2) { Write-Error "PSU init error (exit $LASTEXITCODE)"; exit 1 }
+          Write-Host "PASS: PSU Steady completed"
+
+      - name: "PE2: PSU Spike (Idle/Max Toggle)"
+        if: ${{ github.event.inputs.skip_psu != 'true' }}
+        shell: pwsh
+        run: |
+          $exe = (Get-ChildItem -Path build -Recurse -Filter "occt_native.exe" | Select-Object -First 1).FullName
+          Write-Host "=== PSU Spike Load (${{ env.TEST_DURATION }}s) ==="
+          & $exe --cli --test psu --mode spike --duration ${{ env.TEST_DURATION }}
+          if ($LASTEXITCODE -eq 1) { Write-Error "PSU test FAILED"; exit 1 }
+          if ($LASTEXITCODE -ge 2) { Write-Error "PSU init error (exit $LASTEXITCODE)"; exit 1 }
+          Write-Host "PASS: PSU Spike completed"
+
+      - name: "PE3: PSU Ramp (Gradual Increase)"
+        if: ${{ github.event.inputs.skip_psu != 'true' }}
+        shell: pwsh
+        run: |
+          $exe = (Get-ChildItem -Path build -Recurse -Filter "occt_native.exe" | Select-Object -First 1).FullName
+          Write-Host "=== PSU Ramp Load (${{ env.TEST_DURATION }}s) ==="
+          & $exe --cli --test psu --mode ramp --duration ${{ env.TEST_DURATION }}
+          if ($LASTEXITCODE -eq 1) { Write-Error "PSU test FAILED"; exit 1 }
+          if ($LASTEXITCODE -ge 2) { Write-Error "PSU init error (exit $LASTEXITCODE)"; exit 1 }
+          Write-Host "PASS: PSU Ramp completed"
+
+      # ════════════════════════════════════════════════════════════════════
+      # Phase 6: GPU Report Generation
+      # ════════════════════════════════════════════════════════════════════
+
+      - name: "R1: GPU Test with JSON Report"
+        shell: pwsh
+        run: |
+          $exe = (Get-ChildItem -Path build -Recurse -Filter "occt_native.exe" | Select-Object -First 1).FullName
+          Write-Host "=== GPU Report Generation ==="
+          & $exe --cli --test gpu --mode matrix_mul --duration 10 --report json --output gpu_results
+          if ($LASTEXITCODE -ge 2) { Write-Warning "Report generation had issues (exit $LASTEXITCODE)" }
+          if (Test-Path gpu_results) {
+            $files = Get-ChildItem gpu_results -File
+            Write-Host "Generated $($files.Count) report file(s)"
+            $files | ForEach-Object { Write-Host "  $($_.Name) ($([math]::Round($_.Length / 1KB, 1)) KB)" }
+          }
+
+      # ════════════════════════════════════════════════════════════════════
+      # Upload & Summary (always run)
+      # ════════════════════════════════════════════════════════════════════
+
+      - name: Upload GPU Test Results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gpu-test-results
+          path: |
+            gpu_results/
+            test_results/
+          if-no-files-found: warn
+          retention-days: 90
+
+      - name: Test Summary
+        if: always()
+        shell: pwsh
+        run: |
+          Write-Host ""
+          Write-Host "+==========================================================+"
+          Write-Host "|  GPU & PSU Stress Test Summary                            |"
+          Write-Host "+==========================================================+"
+          Write-Host "|                                                           |"
+          Write-Host "|  Runner: self-hosted GPU                                  |"
+          Write-Host "|  Duration per test: ${{ env.TEST_DURATION }}s"
+          Write-Host "|                                                           |"
+          Write-Host "|  Phase 1: Basic GPU Verification (2)                      |"
+          Write-Host "|    GA1: Matrix FP32     GA2: Matrix FP64                  |"
+          Write-Host "|                                                           |"
+          Write-Host "|  Phase 2: Compute-Intensive (2)                           |"
+          Write-Host "|    GB1: FMA Stress      GB2: Trig Stress                  |"
+          Write-Host "|                                                           |"
+          Write-Host "|  Phase 3: VRAM (1)                                        |"
+          Write-Host "|    GC1: VRAM Pattern                                      |"
+          Write-Host "|                                                           |"
+          Write-Host "|  Phase 4: Mixed & Vulkan (3)                              |"
+          Write-Host "|    GD1: Mixed           GD2: Vulkan 3D                    |"
+          Write-Host "|    GD3: Vulkan Adaptive                                   |"
+          Write-Host "|                                                           |"
+          Write-Host "|  Phase 5: PSU (3)                                         |"
+          Write-Host "|    PE1: Steady          PE2: Spike          PE3: Ramp     |"
+          Write-Host "|                                                           |"
+          Write-Host "|  Phase 6: Report (1)                                      |"
+          Write-Host "|    R1: JSON Report                                        |"
+          Write-Host "|                                                           |"
+          Write-Host "|  Exit codes: 0=PASS, 1=FAIL(hw error), 2=ERROR(init)     |"
+          Write-Host "|  Total: 12 GPU/PSU test steps                             |"
+          Write-Host "+==========================================================+"
+
+      # ── Cleanup build artifacts on runner ───────────────────────────────
+      - name: Cleanup
+        if: always()
+        shell: pwsh
+        run: |
+          if (Test-Path build) { Remove-Item -Recurse -Force build }
+          Write-Host "Build artifacts cleaned up"

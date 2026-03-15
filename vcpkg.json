@@ -1,0 +1,37 @@
+{
+    "name": "occt-native-stress-test",
+    "version-string": "1.0.0",
+    "description": "OCCT-style Hardware Stress Test Tool - Native C++ Implementation",
+    "homepage": "",
+    "dependencies": [
+        {
+            "name": "qt6-base",
+            "version>=": "6.5.0"
+        },
+        {
+            "name": "qt6-charts",
+            "version>=": "6.5.0"
+        }
+    ],
+    "features": {
+        "opencl": {
+            "description": "Enable OpenCL GPU stress testing",
+            "dependencies": [
+                "opencl"
+            ]
+        },
+        "vulkan": {
+            "description": "Enable Vulkan compute stress testing",
+            "dependencies": [
+                {
+                    "name": "vulkan-headers"
+                },
+                {
+                    "name": "vulkan-loader"
+                }
+            ]
+        }
+    },
+    "builtin-baseline": "2024.01.12",
+    "overrides": []
+}

@@ -1,0 +1,160 @@
+{
+    "version": 6,
+    "cmakeMinimumRequired": {
+        "major": 3,
+        "minor": 21,
+        "patch": 0
+    },
+    "configurePresets": [
+        {
+            "name": "default",
+            "hidden": true,
+            "binaryDir": "${sourceDir}/build/${presetName}",
+            "cacheVariables": {
+                "CMAKE_CXX_STANDARD": "17"
+            }
+        },
+        {
+            "name": "windows-msvc-debug",
+            "displayName": "Windows MSVC Debug",
+            "inherits": "default",
+            "generator": "Visual Studio 17 2022",
+            "architecture": "x64",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Debug",
+                "CMAKE_TOOLCHAIN_FILE": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake"
+            },
+            "condition": {
+                "type": "equals",
+                "lhs": "${hostSystemName}",
+                "rhs": "Windows"
+            }
+        },
+        {
+            "name": "windows-msvc-release",
+            "displayName": "Windows MSVC Release",
+            "inherits": "default",
+            "generator": "Visual Studio 17 2022",
+            "architecture": "x64",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Release",
+                "CMAKE_TOOLCHAIN_FILE": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake"
+            },
+            "condition": {
+                "type": "equals",
+                "lhs": "${hostSystemName}",
+                "rhs": "Windows"
+            }
+        },
+        {
+            "name": "windows-msvc-portable",
+            "displayName": "Windows MSVC Portable Release (Static CRT)",
+            "inherits": "windows-msvc-release",
+            "cacheVariables": {
+                "OCCT_PORTABLE": "ON",
+                "CMAKE_MSVC_RUNTIME_LIBRARY": "MultiThreaded"
+            }
+        },
+        {
+            "name": "windows-msvc-release-avx512",
+            "displayName": "Windows MSVC Release (AVX-512)",
+            "inherits": "windows-msvc-release",
+            "cacheVariables": {
+                "OCCT_ENABLE_AVX512": "ON"
+            }
+        },
+        {
+            "name": "linux-gcc-debug",
+            "displayName": "Linux GCC Debug",
+            "inherits": "default",
+            "generator": "Ninja",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Debug",
+                "CMAKE_C_COMPILER": "gcc",
+                "CMAKE_CXX_COMPILER": "g++"
+            },
+            "condition": {
+                "type": "equals",
+                "lhs": "${hostSystemName}",
+                "rhs": "Linux"
+            }
+        },
+        {
+            "name": "linux-gcc-release",
+            "displayName": "Linux GCC Release",
+            "inherits": "default",
+            "generator": "Ninja",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Release",
+                "CMAKE_C_COMPILER": "gcc",
+                "CMAKE_CXX_COMPILER": "g++"
+            },
+            "condition": {
+                "type": "equals",
+                "lhs": "${hostSystemName}",
+                "rhs": "Linux"
+            }
+        },
+        {
+            "name": "macos-clang-debug",
+            "displayName": "macOS Clang Debug",
+            "inherits": "default",
+            "generator": "Ninja",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Debug"
+            },
+            "condition": {
+                "type": "equals",
+                "lhs": "${hostSystemName}",
+                "rhs": "Darwin"
+            }
+        },
+        {
+            "name": "macos-clang-release",
+            "displayName": "macOS Clang Release",
+            "inherits": "default",
+            "generator": "Ninja",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Release"
+            },
+            "condition": {
+                "type": "equals",
+                "lhs": "${hostSystemName}",
+                "rhs": "Darwin"
+            }
+        }
+    ],
+    "buildPresets": [
+        {
+            "name": "windows-debug",
+            "configurePreset": "windows-msvc-debug",
+            "configuration": "Debug"
+        },
+        {
+            "name": "windows-release",
+            "configurePreset": "windows-msvc-release",
+            "configuration": "Release"
+        },
+        {
+            "name": "windows-portable",
+            "configurePreset": "windows-msvc-portable",
+            "configuration": "Release"
+        },
+        {
+            "name": "linux-debug",
+            "configurePreset": "linux-gcc-debug"
+        },
+        {
+            "name": "linux-release",
+            "configurePreset": "linux-gcc-release"
+        },
+        {
+            "name": "macos-debug",
+            "configurePreset": "macos-clang-debug"
+        },
+        {
+            "name": "macos-release",
+            "configurePreset": "macos-clang-release"
+        }
+    ]
+}

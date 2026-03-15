@@ -1,0 +1,510 @@
+/* ═══════════════════════════════════════════════════════════════════════════
+   OCCT Native Stress Test - Dark Theme
+   색상 팔레트:
+     배경:    #1A1A2E
+     카드:    #16213E
+     사이드바: #0F3460
+     빨강:    #C0392B (위험/경고/액센트)
+     녹색:    #27AE60 (정상/성공)
+     주텍스트: #ECF0F1
+     보조텍스트: #95A5A6
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* ─── 전역 ────────────────────────────────────────────────────────────────── */
+QWidget {
+    background-color: #1A1A2E;
+    color: #ECF0F1;
+    font-family: "Segoe UI", "Noto Sans", "Malgun Gothic", sans-serif;
+    font-size: 13px;
+}
+
+/* ─── 메인 윈도우 ────────────────────────────────────────────────────────── */
+QMainWindow {
+    background-color: #1A1A2E;
+}
+
+QMainWindow::separator {
+    background-color: #0F3460;
+    width: 2px;
+    height: 2px;
+}
+
+/* ─── 메뉴바 ─────────────────────────────────────────────────────────────── */
+QMenuBar {
+    background-color: #16213E;
+    color: #ECF0F1;
+    border-bottom: 1px solid #0F3460;
+    padding: 2px;
+}
+
+QMenuBar::item {
+    background: transparent;
+    padding: 4px 12px;
+    border-radius: 4px;
+}
+
+QMenuBar::item:selected {
+    background-color: #0F3460;
+}
+
+QMenu {
+    background-color: #16213E;
+    color: #ECF0F1;
+    border: 1px solid #0F3460;
+    border-radius: 4px;
+    padding: 4px;
+}
+
+QMenu::item {
+    padding: 6px 24px 6px 12px;
+    border-radius: 3px;
+}
+
+QMenu::item:selected {
+    background-color: #0F3460;
+}
+
+QMenu::separator {
+    height: 1px;
+    background-color: #0F3460;
+    margin: 4px 8px;
+}
+
+/* ─── 사이드바 / DockWidget ──────────────────────────────────────────────── */
+QDockWidget {
+    titlebar-close-icon: none;
+    titlebar-normal-icon: none;
+    color: #ECF0F1;
+}
+
+QDockWidget::title {
+    background-color: #0F3460;
+    padding: 8px;
+    font-weight: bold;
+    border-bottom: 2px solid #C0392B;
+}
+
+/* ─── 카드 프레임 ────────────────────────────────────────────────────────── */
+QFrame[frameShape="StyledPanel"],
+QGroupBox {
+    background-color: #16213E;
+    border: 1px solid #0F3460;
+    border-radius: 8px;
+    padding: 12px;
+    margin: 4px;
+}
+
+QGroupBox::title {
+    color: #ECF0F1;
+    font-weight: bold;
+    subcontrol-origin: margin;
+    subcontrol-position: top left;
+    padding: 4px 12px;
+    background-color: #0F3460;
+    border-radius: 4px;
+}
+
+/* ─── 버튼 ───────────────────────────────────────────────────────────────── */
+QPushButton {
+    background-color: #0F3460;
+    color: #ECF0F1;
+    border: 1px solid #1A5276;
+    border-radius: 6px;
+    padding: 8px 20px;
+    font-weight: bold;
+    min-height: 28px;
+}
+
+QPushButton:hover {
+    background-color: #1A5276;
+    border-color: #2980B9;
+}
+
+QPushButton:pressed {
+    background-color: #154360;
+}
+
+QPushButton:disabled {
+    background-color: #2C3E50;
+    color: #5D6D7E;
+    border-color: #34495E;
+}
+
+/* 위험 버튼 (스트레스 시작 등) */
+QPushButton[class="danger"],
+QPushButton#btnStart {
+    background-color: #C0392B;
+    border-color: #E74C3C;
+}
+
+QPushButton[class="danger"]:hover,
+QPushButton#btnStart:hover {
+    background-color: #E74C3C;
+}
+
+/* 성공 버튼 */
+QPushButton[class="success"],
+QPushButton#btnStop {
+    background-color: #27AE60;
+    border-color: #2ECC71;
+}
+
+QPushButton[class="success"]:hover,
+QPushButton#btnStop:hover {
+    background-color: #2ECC71;
+}
+
+/* ─── 입력 필드 ──────────────────────────────────────────────────────────── */
+QLineEdit, QTextEdit, QPlainTextEdit {
+    background-color: #16213E;
+    color: #ECF0F1;
+    border: 1px solid #0F3460;
+    border-radius: 4px;
+    padding: 6px 10px;
+    selection-background-color: #2980B9;
+}
+
+QLineEdit:focus, QTextEdit:focus, QPlainTextEdit:focus {
+    border-color: #2980B9;
+}
+
+/* ─── 스핀박스 ───────────────────────────────────────────────────────────── */
+QSpinBox, QDoubleSpinBox {
+    background-color: #16213E;
+    color: #ECF0F1;
+    border: 1px solid #0F3460;
+    border-radius: 4px;
+    padding: 4px 8px;
+}
+
+QSpinBox::up-button, QDoubleSpinBox::up-button {
+    background-color: #0F3460;
+    border-left: 1px solid #1A5276;
+    border-radius: 0 4px 0 0;
+    width: 20px;
+}
+
+QSpinBox::down-button, QDoubleSpinBox::down-button {
+    background-color: #0F3460;
+    border-left: 1px solid #1A5276;
+    border-radius: 0 0 4px 0;
+    width: 20px;
+}
+
+/* ─── 콤보박스 ───────────────────────────────────────────────────────────── */
+QComboBox {
+    background-color: #16213E;
+    color: #ECF0F1;
+    border: 1px solid #0F3460;
+    border-radius: 4px;
+    padding: 6px 10px;
+    min-height: 24px;
+}
+
+QComboBox::drop-down {
+    background-color: #0F3460;
+    border-left: 1px solid #1A5276;
+    border-radius: 0 4px 4px 0;
+    width: 24px;
+}
+
+QComboBox QAbstractItemView {
+    background-color: #16213E;
+    color: #ECF0F1;
+    border: 1px solid #0F3460;
+    selection-background-color: #0F3460;
+}
+
+/* ─── 탭 위젯 ────────────────────────────────────────────────────────────── */
+QTabWidget::pane {
+    background-color: #16213E;
+    border: 1px solid #0F3460;
+    border-radius: 4px;
+    margin-top: -1px;
+}
+
+QTabBar::tab {
+    background-color: #1A1A2E;
+    color: #95A5A6;
+    border: 1px solid #0F3460;
+    border-bottom: none;
+    border-radius: 6px 6px 0 0;
+    padding: 8px 16px;
+    margin-right: 2px;
+}
+
+QTabBar::tab:selected {
+    background-color: #16213E;
+    color: #ECF0F1;
+    border-bottom: 2px solid #C0392B;
+}
+
+QTabBar::tab:hover:!selected {
+    background-color: #0F3460;
+    color: #ECF0F1;
+}
+
+/* ─── 프로그레스바 ───────────────────────────────────────────────────────── */
+QProgressBar {
+    background-color: #16213E;
+    border: 1px solid #0F3460;
+    border-radius: 6px;
+    text-align: center;
+    color: #ECF0F1;
+    min-height: 20px;
+}
+
+QProgressBar::chunk {
+    background: qlineargradient(
+        x1:0, y1:0, x2:1, y2:0,
+        stop:0 #C0392B,
+        stop:1 #E74C3C
+    );
+    border-radius: 5px;
+}
+
+/* 안전 범위 프로그레스바 */
+QProgressBar[class="safe"]::chunk {
+    background: qlineargradient(
+        x1:0, y1:0, x2:1, y2:0,
+        stop:0 #27AE60,
+        stop:1 #2ECC71
+    );
+}
+
+/* 경고 범위 프로그레스바 */
+QProgressBar[class="warning"]::chunk {
+    background: qlineargradient(
+        x1:0, y1:0, x2:1, y2:0,
+        stop:0 #F39C12,
+        stop:1 #F1C40F
+    );
+}
+
+/* ─── 슬라이더 ───────────────────────────────────────────────────────────── */
+QSlider::groove:horizontal {
+    background-color: #16213E;
+    border: 1px solid #0F3460;
+    height: 8px;
+    border-radius: 4px;
+}
+
+QSlider::handle:horizontal {
+    background-color: #C0392B;
+    border: 2px solid #E74C3C;
+    width: 18px;
+    height: 18px;
+    margin: -6px 0;
+    border-radius: 10px;
+}
+
+QSlider::handle:horizontal:hover {
+    background-color: #E74C3C;
+}
+
+QSlider::sub-page:horizontal {
+    background: qlineargradient(
+        x1:0, y1:0, x2:1, y2:0,
+        stop:0 #C0392B,
+        stop:1 #E74C3C
+    );
+    border-radius: 4px;
+}
+
+/* ─── 스크롤바 ───────────────────────────────────────────────────────────── */
+QScrollBar:vertical {
+    background-color: #1A1A2E;
+    width: 10px;
+    border-radius: 5px;
+}
+
+QScrollBar::handle:vertical {
+    background-color: #0F3460;
+    border-radius: 5px;
+    min-height: 30px;
+}
+
+QScrollBar::handle:vertical:hover {
+    background-color: #1A5276;
+}
+
+QScrollBar::add-line:vertical,
+QScrollBar::sub-line:vertical {
+    height: 0px;
+}
+
+QScrollBar:horizontal {
+    background-color: #1A1A2E;
+    height: 10px;
+    border-radius: 5px;
+}
+
+QScrollBar::handle:horizontal {
+    background-color: #0F3460;
+    border-radius: 5px;
+    min-width: 30px;
+}
+
+QScrollBar::handle:horizontal:hover {
+    background-color: #1A5276;
+}
+
+QScrollBar::add-line:horizontal,
+QScrollBar::sub-line:horizontal {
+    width: 0px;
+}
+
+/* ─── 테이블 ─────────────────────────────────────────────────────────────── */
+QTableView, QTableWidget {
+    background-color: #16213E;
+    alternate-background-color: #1A1A2E;
+    color: #ECF0F1;
+    gridline-color: #0F3460;
+    border: 1px solid #0F3460;
+    border-radius: 4px;
+    selection-background-color: #0F3460;
+}
+
+QHeaderView::section {
+    background-color: #0F3460;
+    color: #ECF0F1;
+    border: none;
+    border-right: 1px solid #1A5276;
+    border-bottom: 2px solid #C0392B;
+    padding: 6px 8px;
+    font-weight: bold;
+}
+
+/* ─── 상태바 ─────────────────────────────────────────────────────────────── */
+QStatusBar {
+    background-color: #16213E;
+    color: #95A5A6;
+    border-top: 1px solid #0F3460;
+    padding: 2px;
+}
+
+QStatusBar::item {
+    border: none;
+}
+
+/* ─── 툴바 ───────────────────────────────────────────────────────────────── */
+QToolBar {
+    background-color: #16213E;
+    border-bottom: 1px solid #0F3460;
+    padding: 4px;
+    spacing: 4px;
+}
+
+QToolButton {
+    background-color: transparent;
+    color: #ECF0F1;
+    border: 1px solid transparent;
+    border-radius: 4px;
+    padding: 4px 8px;
+}
+
+QToolButton:hover {
+    background-color: #0F3460;
+    border-color: #1A5276;
+}
+
+QToolButton:pressed {
+    background-color: #154360;
+}
+
+/* ─── 라벨 ───────────────────────────────────────────────────────────────── */
+QLabel {
+    color: #ECF0F1;
+    background: transparent;
+}
+
+QLabel[class="secondary"] {
+    color: #95A5A6;
+}
+
+QLabel[class="title"] {
+    font-size: 18px;
+    font-weight: bold;
+    color: #ECF0F1;
+}
+
+QLabel[class="subtitle"] {
+    font-size: 14px;
+    color: #95A5A6;
+}
+
+QLabel[class="danger"] {
+    color: #E74C3C;
+    font-weight: bold;
+}
+
+QLabel[class="success"] {
+    color: #2ECC71;
+    font-weight: bold;
+}
+
+QLabel[class="warning"] {
+    color: #F1C40F;
+    font-weight: bold;
+}
+
+/* ─── 체크박스 / 라디오버튼 ──────────────────────────────────────────────── */
+QCheckBox {
+    color: #ECF0F1;
+    spacing: 8px;
+}
+
+QCheckBox::indicator {
+    width: 18px;
+    height: 18px;
+    border: 2px solid #0F3460;
+    border-radius: 4px;
+    background-color: #16213E;
+}
+
+QCheckBox::indicator:checked {
+    background-color: #C0392B;
+    border-color: #E74C3C;
+}
+
+QCheckBox::indicator:hover {
+    border-color: #2980B9;
+}
+
+QRadioButton {
+    color: #ECF0F1;
+    spacing: 8px;
+}
+
+QRadioButton::indicator {
+    width: 18px;
+    height: 18px;
+    border: 2px solid #0F3460;
+    border-radius: 10px;
+    background-color: #16213E;
+}
+
+QRadioButton::indicator:checked {
+    background-color: #C0392B;
+    border-color: #E74C3C;
+}
+
+/* ─── 툴팁 ───────────────────────────────────────────────────────────────── */
+QToolTip {
+    background-color: #16213E;
+    color: #ECF0F1;
+    border: 1px solid #0F3460;
+    border-radius: 4px;
+    padding: 4px 8px;
+}
+
+/* ─── 스플리터 ───────────────────────────────────────────────────────────── */
+QSplitter::handle {
+    background-color: #0F3460;
+    width: 2px;
+    height: 2px;
+}
+
+QSplitter::handle:hover {
+    background-color: #2980B9;
+}

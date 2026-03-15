@@ -1,0 +1,31 @@
+#pragma once
+
+// ─── 버전 정보 ──────────────────────────────────────────────────────────────
+#define OCCT_VERSION_MAJOR @OCCT_VERSION_MAJOR@
+#define OCCT_VERSION_MINOR @OCCT_VERSION_MINOR@
+#define OCCT_VERSION_PATCH @OCCT_VERSION_PATCH@
+#define OCCT_VERSION_STRING "@OCCT_VERSION_STRING@"
+
+// ─── SIMD 지원 ──────────────────────────────────────────────────────────────
+#cmakedefine OCCT_HAS_AVX2
+#cmakedefine OCCT_HAS_AVX512
+
+// ─── GPU API 지원 ───────────────────────────────────────────────────────────
+#cmakedefine OCCT_HAS_OPENCL
+#cmakedefine OCCT_HAS_VULKAN
+
+// ─── 플랫폼 감지 ────────────────────────────────────────────────────────────
+#if defined(_WIN32) || defined(_WIN64)
+    #define OCCT_PLATFORM_WINDOWS 1
+#elif defined(__linux__)
+    #define OCCT_PLATFORM_LINUX 1
+#elif defined(__APPLE__)
+    #define OCCT_PLATFORM_MACOS 1
+#endif
+
+// ─── 아키텍처 감지 ──────────────────────────────────────────────────────────
+#if defined(_M_X64) || defined(__x86_64__)
+    #define OCCT_ARCH_X64 1
+#elif defined(_M_ARM64) || defined(__aarch64__)
+    #define OCCT_ARCH_ARM64 1
+#endif

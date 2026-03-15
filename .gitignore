@@ -1,0 +1,39 @@
+# Build
+build/
+cmake-build-*/
+out/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Qt
+moc_*.cpp
+ui_*.h
+qrc_*.cpp
+*.pro.user
+
+# Compiled
+*.o
+*.obj
+*.a
+*.lib
+*.so
+*.dylib
+*.dll
+*.exe
+
+# Generated
+config.h
+
+# Package
+dist/
+*.zip
+*.tar.gz
+
+# Test output
+test_results/

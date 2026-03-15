@@ -1,0 +1,31 @@
+{
+    "stop_on_error": true,
+    "steps": [
+        {
+            "engine": "cpu",
+            "duration_secs": 5,
+            "parallel_with_next": false,
+            "settings": {
+                "mode": "sse"
+            }
+        },
+        {
+            "engine": "ram",
+            "duration_secs": 60,
+            "parallel_with_next": false,
+            "settings": {
+                "mode": "march",
+                "memory_pct": 0.03
+            }
+        },
+        {
+            "engine": "storage",
+            "duration_secs": 30,
+            "parallel_with_next": false,
+            "settings": {
+                "mode": "seq_write",
+                "file_size_mb": 32
+            }
+        }
+    ]
+}
