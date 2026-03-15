@@ -646,7 +646,7 @@ void MainWindow::onTestStopped(const QString& engineName)
                     QJsonObject cpu;
                     cpu["gflops"] = m.gflops;
                     cpu["error_count"] = m.error_count;
-                    cpu["elapsed_sec"] = m.elapsed_sec;
+                    cpu["elapsed_secs"] = m.elapsed_secs;
                     testResults["cpu"] = cpu;
                 }
             }
