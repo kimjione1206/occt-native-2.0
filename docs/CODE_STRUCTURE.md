@@ -67,6 +67,8 @@ occt-native/
 │   │   │   ├── certificate_panel.h/cpp # 인증서
 │   │   │   ├── sysinfo_panel.h/cpp     # 시스템 정보
 │   │   │   └── results_panel.h/cpp     # 결과 조회
+│   │   ├── dialogs/            # 다이얼로그
+│   │   │   └── token_dialog.h/cpp     # GitHub 토큰 설정 (보안 입력/검증/저장)
 │   │   └── widgets/            # 공용 위젯
 │   │       ├── realtime_chart.h/cpp    # 실시간 차트 (멀티시리즈: ChartSeries, addSeries(), 범례)
 │   │       └── circular_gauge.h/cpp    # 원형 게이지
@@ -97,7 +99,8 @@ occt-native/
 │       ├── crc32.h/cpp             # CRC32C (HW+SW)
 │       ├── app_config.h/cpp        # QSettings 래퍼
 │       ├── file_logger.h/cpp       # 로그 파일 (5MB 로테이션)
-│       └── portable_paths.h/cpp    # 포터블 경로
+│       ├── portable_paths.h/cpp    # 포터블 경로
+│       └── secure_token_store.h/cpp # 보안 토큰 저장 (Win:DPAPI, Mac:Keychain, Linux:XOR)
 ├── tests/                      # 단위 테스트
 ├── resources/                  # QRC, 스타일시트
 ├── tools/
