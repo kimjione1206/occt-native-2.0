@@ -18,6 +18,8 @@
 #include "../updater/update_downloader.h"
 #include "../updater/update_installer.h"
 #include "../updater/log_uploader.h"
+#include "../engines/cpu_engine.h"
+#include "config.h"
 
 #include <QApplication>
 #include <QFile>
@@ -581,7 +583,7 @@ void MainWindow::stopAllTests()
 
 void MainWindow::onUpdateAvailable(const updater::UpdateInfo& info)
 {
-    auto* dialog = new updater::UpdateDialog(info, this);
+    auto* dialog = new updater::UpdateDialog(info, OCCT_VERSION_STRING, this);
 
     connect(dialog, &updater::UpdateDialog::updateAccepted, this, [this, info, dialog]() {
         dialog->showProgress();
@@ -638,8 +640,9 @@ void MainWindow::onTestStopped(const QString& engineName)
 
         if (key == "cpu") {
             if (auto* p = qobject_cast<CpuPanel*>(it.value())) {
-                if (p->engine()) {
-                    auto m = p->engine()->get_metrics();
+                auto* cpuEngine = dynamic_cast<CpuEngine*>(p->engine());
+                if (cpuEngine) {
+                    auto m = cpuEngine->get_metrics();
                     QJsonObject cpu;
                     cpu["gflops"] = m.gflops;
                     cpu["error_count"] = m.error_count;
