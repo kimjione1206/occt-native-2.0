@@ -20,6 +20,11 @@
 #include "../updater/log_uploader.h"
 #include "dialogs/token_dialog.h"
 #include "../engines/cpu_engine.h"
+#include "../engines/gpu_engine.h"
+#include "../engines/ram_engine.h"
+#include "../engines/storage_engine.h"
+#include "../engines/psu_engine.h"
+#include "../monitor/sensor_manager.h"
 #include "config.h"
 
 #include <QApplication>
@@ -33,6 +38,7 @@
 #include <QStyle>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QJsonArray>
 #include <QHostInfo>
 
 #if defined(_WIN32)
@@ -662,37 +668,134 @@ void MainWindow::onTestStopped(const QString& engineName)
 {
     if (!logUploader_ || !logUploader_->hasToken()) return;
 
-    // Collect basic test result info
     QJsonObject testResults;
     testResults["engine"] = engineName;
     testResults["timestamp"] = QDateTime::currentDateTime().toString(Qt::ISODate);
     testResults["app_version"] = OCCT_VERSION_STRING;
 
-    // Collect metrics from the stopped engine
+    // ── Collect metrics from all relevant engines ──
     for (auto it = panels_.begin(); it != panels_.end(); ++it) {
         const QString& key = it.key();
         if (engineName != "all" && key != engineName) continue;
 
         if (key == "cpu") {
             if (auto* p = qobject_cast<CpuPanel*>(it.value())) {
-                auto* cpuEngine = dynamic_cast<CpuEngine*>(p->engine());
-                if (cpuEngine) {
-                    auto m = cpuEngine->get_metrics();
-                    QJsonObject cpu;
-                    cpu["gflops"] = m.gflops;
-                    cpu["error_count"] = m.error_count;
-                    cpu["elapsed_secs"] = m.elapsed_secs;
-                    testResults["cpu"] = cpu;
+                auto* eng = dynamic_cast<CpuEngine*>(p->engine());
+                if (eng) {
+                    auto m = eng->get_metrics();
+                    QJsonObject o;
+                    o["gflops"] = m.gflops;
+                    o["peak_gflops"] = m.peak_gflops;
+                    o["temperature"] = m.temperature;
+                    o["power_watts"] = m.power_watts;
+                    o["power_estimated"] = m.power_estimated;
+                    o["active_threads"] = m.active_threads;
+                    o["error_count"] = m.error_count;
+                    o["elapsed_secs"] = m.elapsed_secs;
+                    testResults["cpu"] = o;
+                }
+            }
+        } else if (key == "gpu") {
+            if (auto* p = qobject_cast<GpuPanel*>(it.value())) {
+                auto* eng = dynamic_cast<GpuEngine*>(p->engine());
+                if (eng) {
+                    auto m = eng->get_metrics();
+                    QJsonObject o;
+                    o["gflops"] = m.gflops;
+                    o["temperature"] = m.temperature;
+                    o["power_watts"] = m.power_watts;
+                    o["gpu_usage_pct"] = m.gpu_usage_pct;
+                    o["vram_usage_pct"] = m.vram_usage_pct;
+                    o["vram_errors"] = static_cast<qint64>(m.vram_errors);
+                    o["artifact_count"] = static_cast<qint64>(m.artifact_count);
+                    o["fps"] = m.fps;
+                    o["elapsed_secs"] = m.elapsed_secs;
+                    testResults["gpu"] = o;
+                }
+            }
+        } else if (key == "ram") {
+            if (auto* p = qobject_cast<RamPanel*>(it.value())) {
+                auto* eng = dynamic_cast<RamEngine*>(p->engine());
+                if (eng) {
+                    auto m = eng->get_metrics();
+                    QJsonObject o;
+                    o["bandwidth_mbs"] = m.bandwidth_mbs;
+                    o["errors_found"] = static_cast<qint64>(m.errors_found);
+                    o["memory_used_mb"] = m.memory_used_mb;
+                    o["pages_locked"] = m.pages_locked;
+                    o["progress_pct"] = m.progress_pct;
+                    o["elapsed_secs"] = m.elapsed_secs;
+                    testResults["ram"] = o;
+                }
+            }
+        } else if (key == "storage") {
+            if (auto* p = qobject_cast<StoragePanel*>(it.value())) {
+                auto* eng = dynamic_cast<StorageEngine*>(p->engine());
+                if (eng) {
+                    auto m = eng->get_metrics();
+                    QJsonObject o;
+                    o["write_mbs"] = m.write_mbs;
+                    o["read_mbs"] = m.read_mbs;
+                    o["iops"] = m.iops;
+                    o["latency_us"] = m.latency_us;
+                    o["error_count"] = m.error_count;
+                    o["verify_errors"] = static_cast<qint64>(m.verify_errors);
+                    o["crc_errors"] = static_cast<qint64>(m.crc_errors);
+                    o["progress_pct"] = m.progress_pct;
+                    o["elapsed_secs"] = m.elapsed_secs;
+                    testResults["storage"] = o;
+                }
+            }
+        } else if (key == "psu") {
+            if (auto* p = qobject_cast<PsuPanel*>(it.value())) {
+                auto* eng = dynamic_cast<PsuEngine*>(p->engine());
+                if (eng) {
+                    auto m = eng->get_metrics();
+                    QJsonObject o;
+                    o["total_power_watts"] = m.total_power_watts;
+                    o["cpu_power_watts"] = m.cpu_power_watts;
+                    o["gpu_power_watts"] = m.gpu_power_watts;
+                    o["power_stability_pct"] = m.power_stability_pct;
+                    o["max_power_drop_watts"] = m.max_power_drop_watts;
+                    o["power_drop_events"] = m.power_drop_events;
+                    o["errors_cpu"] = m.errors_cpu;
+                    o["errors_gpu"] = m.errors_gpu;
+                    o["elapsed_secs"] = m.elapsed_secs;
+                    testResults["psu"] = o;
                 }
             }
         }
-        // Additional engines can be added similarly
     }
 
-    QString resultsJson = QJsonDocument(testResults).toJson(QJsonDocument::Compact);
+    // ── Sensor snapshot (temperature/power from SensorManager) ──
+    if (sensorMgr_) {
+        QJsonObject sensors;
+        sensors["cpu_temperature"] = sensorMgr_->get_cpu_temperature();
+        sensors["gpu_temperature"] = sensorMgr_->get_gpu_temperature();
+        sensors["cpu_power"] = sensorMgr_->get_cpu_power();
+        sensors["cpu_power_estimated"] = sensorMgr_->is_cpu_power_estimated();
+
+        QJsonArray allReadings;
+        for (const auto& r : sensorMgr_->get_all_readings()) {
+            QJsonObject reading;
+            reading["name"] = QString::fromStdString(r.name);
+            reading["category"] = QString::fromStdString(r.category);
+            reading["value"] = r.value;
+            reading["unit"] = QString::fromStdString(r.unit);
+            allReadings.append(reading);
+        }
+        sensors["all_readings"] = allReadings;
+        testResults["sensors"] = sensors;
+    }
+
+    QString resultsJson = QJsonDocument(testResults).toJson(QJsonDocument::Indented);
+
+    // ── System info ──
     QJsonObject sysInfo;
     sysInfo["hostname"] = QHostInfo::localHostName();
-    QString sysInfoJson = QJsonDocument(sysInfo).toJson(QJsonDocument::Compact);
+    sysInfo["app_version"] = OCCT_VERSION_STRING;
+    sysInfo["timestamp"] = QDateTime::currentDateTime().toString(Qt::ISODate);
+    QString sysInfoJson = QJsonDocument(sysInfo).toJson(QJsonDocument::Indented);
 
     logUploader_->upload(resultsJson, sysInfoJson, QString(), "manual_stop");
     statusLabel_->setText("테스트 로그 전송 중...");
