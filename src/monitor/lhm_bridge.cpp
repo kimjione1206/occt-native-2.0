@@ -79,13 +79,17 @@ struct LhmBridge::Impl {
         }
         SetHandleInformation(hStdoutRead, HANDLE_FLAG_INHERIT, 0);  // 읽기 핸들은 상속 안 함
 
+        // stdin: open NUL device (prevents C# stdin monitor from seeing EOF immediately)
+        HANDLE hNul = CreateFileW(L"NUL", GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                                   &sa, OPEN_EXISTING, 0, nullptr);
+
         // 프로세스 생성
         STARTUPINFOW si = {};
         si.cb = sizeof(si);
         si.dwFlags = STARTF_USESTDHANDLES;
         si.hStdOutput = hStdoutWrite;
         si.hStdError = hStdoutWrite;
-        si.hStdInput = INVALID_HANDLE_VALUE;
+        si.hStdInput = hNul;
 
         PROCESS_INFORMATION pi = {};
         std::wstring cmdLine = helper_path.toStdWString() + L" --loop 500";
@@ -95,15 +99,17 @@ struct LhmBridge::Impl {
             log("[LHM] CreateProcess failed: " + std::to_string(GetLastError()));
             CloseHandle(hStdoutRead);  hStdoutRead = INVALID_HANDLE_VALUE;
             CloseHandle(hStdoutWrite); hStdoutWrite = INVALID_HANDLE_VALUE;
+            if (hNul != INVALID_HANDLE_VALUE) CloseHandle(hNul);
             return false;
         }
 
         hProcess = pi.hProcess;
         CloseHandle(pi.hThread);  // 스레드 핸들 불필요
 
-        // 쓰기 핸들 닫기 (부모에서는 읽기만)
+        // 쓰기 핸들 + NUL 핸들 닫기 (자식에게 상속 후 불필요)
         CloseHandle(hStdoutWrite);
         hStdoutWrite = INVALID_HANDLE_VALUE;
+        if (hNul != INVALID_HANDLE_VALUE) CloseHandle(hNul);
 
         process_running = true;
         log("[LHM] Started persistent helper (PID: " + std::to_string(pi.dwProcessId) + ")");
@@ -112,7 +118,14 @@ struct LhmBridge::Impl {
         for (int i = 0; i < 15; ++i) {
             DWORD avail = 0;
             if (PeekNamedPipe(hStdoutRead, nullptr, 0, nullptr, &avail, nullptr) && avail > 0) {
-                log("[LHM] First data available after " + std::to_string(i) + "s");
+                log("[LHM] First data available after " + std::to_string(i) + "s, avail=" + std::to_string(avail));
+                // 첫 데이터 미리보기 (파이프에서 꺼내지 않고 Peek)
+                char preview[128] = {};
+                DWORD previewRead = 0;
+                if (PeekNamedPipe(hStdoutRead, preview, sizeof(preview) - 1, &previewRead, nullptr, nullptr) && previewRead > 0) {
+                    preview[previewRead] = '\0';
+                    log("[LHM-DIAG] First line preview: " + std::string(preview, std::min<DWORD>(previewRead, 100)));
+                }
                 return true;
             }
             // 프로세스가 죽었는지 확인
@@ -162,8 +175,11 @@ struct LhmBridge::Impl {
         // 파이프에서 가용 데이터 확인
         DWORD avail = 0;
         if (!PeekNamedPipe(hStdoutRead, nullptr, 0, nullptr, &avail, nullptr)) {
+            log("[LHM-DIAG] PeekNamedPipe failed, error=" + std::to_string(GetLastError()));
             return -1;
         }
+
+        log("[LHM-DIAG] PeekNamedPipe: avail=" + std::to_string(avail));
 
         if (avail == 0) return 0;  // 아직 데이터 없음
 
@@ -172,8 +188,11 @@ struct LhmBridge::Impl {
         DWORD bytesRead = 0;
         DWORD toRead = (avail < sizeof(buf)) ? avail : static_cast<DWORD>(sizeof(buf));
         if (!ReadFile(hStdoutRead, buf, toRead, &bytesRead, nullptr) || bytesRead == 0) {
+            log("[LHM-DIAG] ReadFile failed or 0 bytes");
             return 0;
         }
+
+        log("[LHM-DIAG] ReadFile: bytesRead=" + std::to_string(bytesRead));
 
         line_buffer.append(buf, bytesRead);
 
@@ -191,6 +210,9 @@ struct LhmBridge::Impl {
         if (!lastLine.empty() && lastLine.back() == '\r') {
             lastLine.pop_back();
         }
+
+        log("[LHM-DIAG] lastLine length=" + std::to_string(lastLine.size())
+            + " first100=" + lastLine.substr(0, std::min<size_t>(100, lastLine.size())));
 
         // JSON 파싱
         QByteArray jsonData = QByteArray::fromRawData(lastLine.data(),
@@ -210,10 +232,14 @@ struct LhmBridge::Impl {
         // { "hardware": [ { "name": "...", "type": "CPU",
         //     "sensors": [ { "name": "...", "value": 45.0, "unit": "C" }, ... ] }, ... ] }
         QJsonArray hardware = root["hardware"].toArray();
+        log("[LHM-DIAG] hardware array size=" + std::to_string(hardware.size()));
+
         for (const auto& hw_val : hardware) {
             QJsonObject hw = hw_val.toObject();
             QString type = hw["type"].toString();
             QJsonArray sensors = hw["sensors"].toArray();
+
+            log("[LHM-DIAG] hw=" + type.toStdString() + " sensors=" + std::to_string(sensors.size()));
 
             for (const auto& s_val : sensors) {
                 QJsonObject s = s_val.toObject();
@@ -231,6 +257,7 @@ struct LhmBridge::Impl {
                 out.push_back(std::move(reading));
             }
         }
+        log("[LHM-DIAG] total readings=" + std::to_string(out.size()));
         return hardware.isEmpty() ? 0 : 1;
     }
 };

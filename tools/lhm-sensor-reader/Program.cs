@@ -1,3 +1,4 @@
+using System.Linq;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using LibreHardwareMonitor.Hardware;
@@ -90,11 +91,14 @@ public class Program
             }
 
             // Loop mode — resident process, initialize once, poll repeatedly
+            Console.Error.WriteLine("[LHM-CS] Loop mode started, interval=" + loopMs + "ms");
+
             using var cts = new CancellationTokenSource();
             Console.CancelKeyPress += (_, e) =>
             {
                 e.Cancel = true;
                 cts.Cancel();
+                Console.Error.WriteLine("[LHM-CS] Loop exiting, reason: CancelKeyPress");
             };
 
             // Monitor stdin on a background thread: when the parent process
@@ -103,28 +107,41 @@ public class Program
             {
                 try
                 {
+                    Console.Error.WriteLine("[LHM-CS] stdin monitor started");
                     // ReadLine blocks until a line arrives or the stream closes.
                     // We don't expect any input — we only care about EOF (null).
                     while (Console.In.ReadLine() != null) { }
+                    Console.Error.WriteLine("[LHM-CS] stdin EOF detected — parent likely gone");
                 }
-                catch { /* stream error = parent gone */ }
+                catch (Exception ex)
+                {
+                    Console.Error.WriteLine("[LHM-CS] stdin monitor exception: " + ex.Message);
+                }
+                Console.Error.WriteLine("[LHM-CS] Loop exiting, reason: stdin closed/EOF");
                 cts.Cancel();
             });
 
             var visitor = new UpdateVisitor();
+            int cycleCount = 0;
 
             while (!cts.Token.IsCancellationRequested)
             {
                 try
                 {
+                    cycleCount++;
+                    Console.Error.WriteLine("[LHM-CS] Cycle " + cycleCount + ": Before Accept(visitor)");
                     computer.Accept(visitor);
+                    Console.Error.WriteLine("[LHM-CS] After Accept(visitor)");
                     var output = CollectSensorData(computer);
+                    Console.Error.WriteLine("[LHM-CS] Cycle " + cycleCount + ": hardware=" + output.Hardware.Count
+                        + " totalSensors=" + output.Hardware.Sum(h => h.Sensors.Count));
                     var json = JsonSerializer.Serialize(output, AppJsonContext.Default.SensorOutput);
                     Console.WriteLine(json);
                     Console.Out.Flush();
                 }
                 catch (IOException)
                 {
+                    Console.Error.WriteLine("[LHM-CS] Loop exiting, reason: stdout pipe broken");
                     // stdout pipe broken — parent is gone
                     break;
                 }
@@ -148,10 +165,12 @@ public class Program
                 }
                 catch (AggregateException ex) when (ex.InnerException is TaskCanceledException)
                 {
+                    Console.Error.WriteLine("[LHM-CS] Loop exiting, reason: Task.Delay cancelled (CancellationToken)");
                     break;
                 }
             }
 
+            Console.Error.WriteLine("[LHM-CS] Loop ended after " + cycleCount + " cycles, IsCancellationRequested=" + cts.Token.IsCancellationRequested);
             return 0;
         }
         finally

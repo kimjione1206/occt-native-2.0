@@ -903,6 +903,8 @@ void SensorManager::poll_wmi() {
     if (lhm_bridge_ && lhm_bridge_->is_available()) {
         std::vector<SensorReading> lhm_readings;
         lhm_bridge_->poll(lhm_readings);
+        fprintf(stderr, "[Sensor-DIAG] LHM available=%d, lhm_readings=%zu, have_lhm_data=%d\n",
+            lhm_bridge_->is_available(), lhm_readings.size(), have_lhm_data);
         if (!lhm_readings.empty()) {
             for (const auto& r : lhm_readings) {
                 update_reading(r.name, r.category, r.value, r.unit);
