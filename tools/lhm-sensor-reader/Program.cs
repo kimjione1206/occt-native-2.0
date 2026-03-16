@@ -101,25 +101,9 @@ public class Program
                 Console.Error.WriteLine("[LHM-CS] Loop exiting, reason: CancelKeyPress");
             };
 
-            // Monitor stdin on a background thread: when the parent process
-            // exits or closes our stdin pipe, cancel the loop so we exit cleanly.
-            var stdinMonitor = Task.Run(() =>
-            {
-                try
-                {
-                    Console.Error.WriteLine("[LHM-CS] stdin monitor started");
-                    // ReadLine blocks until a line arrives or the stream closes.
-                    // We don't expect any input — we only care about EOF (null).
-                    while (Console.In.ReadLine() != null) { }
-                    Console.Error.WriteLine("[LHM-CS] stdin EOF detected — parent likely gone");
-                }
-                catch (Exception ex)
-                {
-                    Console.Error.WriteLine("[LHM-CS] stdin monitor exception: " + ex.Message);
-                }
-                Console.Error.WriteLine("[LHM-CS] Loop exiting, reason: stdin closed/EOF");
-                cts.Cancel();
-            });
+            // Parent process exit detection: rely on stdout IOException
+            // (when parent closes pipe, Console.WriteLine throws IOException)
+            // stdin monitoring removed — NUL device causes immediate EOF on some systems
 
             var visitor = new UpdateVisitor();
             int cycleCount = 0;
