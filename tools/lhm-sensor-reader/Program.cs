@@ -105,20 +105,67 @@ public class Program
             // (when parent closes pipe, Console.WriteLine throws IOException)
             // stdin monitoring removed — NUL device causes immediate EOF on some systems
 
-            var visitor = new UpdateVisitor();
+            // --- Classify hardware into fast/slow groups ---
+            var fastHardware = new List<IHardware>(); // CPU, GPU, MB, RAM
+            var slowHardware = new List<IHardware>(); // Storage (SMART I/O is expensive)
+
+            foreach (var hw in computer.Hardware)
+            {
+                if (hw.HardwareType == HardwareType.Storage)
+                    slowHardware.Add(hw);
+                else
+                    fastHardware.Add(hw);
+            }
+
+            Console.Error.WriteLine("[LHM-CS] Fast hardware: " + fastHardware.Count
+                + " (" + string.Join(", ", fastHardware.Select(h => h.HardwareType)) + ")");
+            Console.Error.WriteLine("[LHM-CS] Slow hardware: " + slowHardware.Count
+                + " (" + string.Join(", ", slowHardware.Select(h => h.HardwareType)) + ")");
+
             int cycleCount = 0;
+            const int slowIntervalMs = 30000; // Storage: every 30 seconds
+            var slowStopwatch = System.Diagnostics.Stopwatch.StartNew();
+
+            // Initial slow update (first cycle includes all hardware)
+            foreach (var hw in slowHardware)
+            {
+                hw.Update();
+                foreach (var sub in hw.SubHardware)
+                    sub.Update();
+            }
 
             while (!cts.Token.IsCancellationRequested)
             {
                 try
                 {
                     cycleCount++;
-                    Console.Error.WriteLine("[LHM-CS] Cycle " + cycleCount + ": Before Accept(visitor)");
-                    computer.Accept(visitor);
-                    Console.Error.WriteLine("[LHM-CS] After Accept(visitor)");
+                    var sw = System.Diagnostics.Stopwatch.StartNew();
+
+                    // Fast loop: CPU + GPU + MB + RAM (every cycle)
+                    foreach (var hw in fastHardware)
+                    {
+                        hw.Update();
+                        foreach (var sub in hw.SubHardware)
+                            sub.Update();
+                    }
+
+                    // Slow loop: Storage (every 30 seconds)
+                    if (slowStopwatch.ElapsedMilliseconds >= slowIntervalMs)
+                    {
+                        Console.Error.WriteLine("[LHM-CS] Cycle " + cycleCount + ": Slow update (Storage)");
+                        foreach (var hw in slowHardware)
+                        {
+                            hw.Update();
+                            foreach (var sub in hw.SubHardware)
+                                sub.Update();
+                        }
+                        slowStopwatch.Restart();
+                    }
+
+                    sw.Stop();
                     var output = CollectSensorData(computer);
-                    Console.Error.WriteLine("[LHM-CS] Cycle " + cycleCount + ": hardware=" + output.Hardware.Count
-                        + " totalSensors=" + output.Hardware.Sum(h => h.Sensors.Count));
+                    Console.Error.WriteLine("[LHM-CS] Cycle " + cycleCount + ": " + sw.ElapsedMilliseconds + "ms, hw="
+                        + output.Hardware.Count + " sensors=" + output.Hardware.Sum(h => h.Sensors.Count));
                     var json = JsonSerializer.Serialize(output, AppJsonContext.Default.SensorOutput);
                     Console.WriteLine(json);
                     Console.Out.Flush();
@@ -126,7 +173,6 @@ public class Program
                 catch (IOException)
                 {
                     Console.Error.WriteLine("[LHM-CS] Loop exiting, reason: stdout pipe broken");
-                    // stdout pipe broken — parent is gone
                     break;
                 }
                 catch (Exception ex)

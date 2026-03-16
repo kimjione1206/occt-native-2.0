@@ -951,7 +951,10 @@ void SensorManager::poll_wmi() {
         }
     }
 
-    if (!have_lhm_data) {
+    // When LHM bridge is running but hasn't returned data yet (avail=0),
+    // skip WMI fallback to avoid 35s blocking from WMI queries
+    bool lhm_active = lhm_bridge_ && lhm_bridge_->is_available();
+    if (!have_lhm_data && !lhm_active) {
         // --- Query ROOT\WMI for thermal zones (cached connection) ---
         int zone_idx = 0;
         if (wmi_svc_root_wmi_) {
@@ -1210,7 +1213,7 @@ void SensorManager::poll_wmi() {
     }
 
     // --- B) CPU power estimation (from usage * TDP) ---
-    if (!have_lhm_data && cpu_pct > 0.0) {
+    if (!have_lhm_data && !lhm_active && cpu_pct > 0.0) {
         double tdp = estimate_tdp(cpu_brand_);
         double estimated_power = tdp * (cpu_pct / 100.0);
         update_reading("CPU Power", "CPU", estimated_power, "W");
