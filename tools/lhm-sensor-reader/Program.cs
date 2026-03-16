@@ -125,6 +125,7 @@ public class Program
             int cycleCount = 0;
             const int slowIntervalMs = 30000; // Storage: every 30 seconds
             var slowStopwatch = System.Diagnostics.Stopwatch.StartNew();
+            bool slowUpdateRunning = false;
 
             // Initial slow update (first cycle includes all hardware)
             foreach (var hw in slowHardware)
@@ -149,17 +150,36 @@ public class Program
                             sub.Update();
                     }
 
-                    // Slow loop: Storage (every 30 seconds)
-                    if (slowStopwatch.ElapsedMilliseconds >= slowIntervalMs)
+                    // Slow loop: Storage (every 30 seconds, async — never blocks fast loop)
+                    if (!slowUpdateRunning && slowStopwatch.ElapsedMilliseconds >= slowIntervalMs)
                     {
-                        Console.Error.WriteLine("[LHM-CS] Cycle " + cycleCount + ": Slow update (Storage)");
-                        foreach (var hw in slowHardware)
+                        slowUpdateRunning = true;
+                        var cycle = cycleCount;
+                        Task.Run(() =>
                         {
-                            hw.Update();
-                            foreach (var sub in hw.SubHardware)
-                                sub.Update();
-                        }
-                        slowStopwatch.Restart();
+                            try
+                            {
+                                Console.Error.WriteLine("[LHM-CS] Cycle " + cycle + ": Slow update START (Storage)");
+                                var ssw = System.Diagnostics.Stopwatch.StartNew();
+                                foreach (var hw in slowHardware)
+                                {
+                                    hw.Update();
+                                    foreach (var sub in hw.SubHardware)
+                                        sub.Update();
+                                }
+                                ssw.Stop();
+                                Console.Error.WriteLine("[LHM-CS] Cycle " + cycle + ": Slow update DONE (" + ssw.ElapsedMilliseconds + "ms)");
+                            }
+                            catch (Exception ex)
+                            {
+                                Console.Error.WriteLine("[LHM-CS] Slow update error: " + ex.Message);
+                            }
+                            finally
+                            {
+                                slowUpdateRunning = false;
+                                slowStopwatch.Restart();
+                            }
+                        });
                     }
 
                     sw.Stop();
