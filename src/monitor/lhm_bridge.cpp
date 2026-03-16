@@ -88,7 +88,7 @@ struct LhmBridge::Impl {
         si.cb = sizeof(si);
         si.dwFlags = STARTF_USESTDHANDLES;
         si.hStdOutput = hStdoutWrite;
-        si.hStdError = hStdoutWrite;
+        si.hStdError = GetStdHandle(STD_ERROR_HANDLE);  // stderr 분리 (stdout 파이프와 혼합 방지)
         si.hStdInput = hNul;
 
         PROCESS_INFORMATION pi = {};
