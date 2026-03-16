@@ -101,10 +101,16 @@ struct LhmBridge::Impl {
         process_running = false;
     }
 
-    bool read_latest(std::vector<SensorReading>& out) {
+    // Returns: 1 = success, 0 = no data yet (not an error), -1 = process dead
+    int read_latest(std::vector<SensorReading>& out) {
         if (!process || process->state() == QProcess::NotRunning) {
             process_running = false;
-            return false;
+            return -1;
+        }
+
+        // Wait briefly for data if none available
+        if (!process->canReadLine()) {
+            process->waitForReadyRead(500);
         }
 
         // Read all available complete lines, keep only the last one (most recent data)
@@ -114,7 +120,7 @@ struct LhmBridge::Impl {
         }
 
         if (lastLine.isEmpty()) {
-            return false;
+            return 0;  // No data yet, not a failure
         }
 
         // Parse JSON
@@ -154,7 +160,7 @@ struct LhmBridge::Impl {
                 out.push_back(std::move(reading));
             }
         }
-        return !hardware.isEmpty();
+        return hardware.isEmpty() ? 0 : 1;
     }
 };
 
@@ -168,6 +174,11 @@ LhmBridge::~LhmBridge() {
 }
 
 bool LhmBridge::initialize() {
+    // Prevent double initialization
+    if (available_ || (impl_->process && impl_->process->state() == QProcess::Running)) {
+        return available_;
+    }
+
     if (!impl_->find_helper()) {
         impl_->log("[LHM] Helper not found, using WMI fallback");
         available_ = false;
@@ -232,26 +243,31 @@ void LhmBridge::poll(std::vector<SensorReading>& out) {
     }
 
     // Read latest data from persistent process stdout
-    if (!impl_->read_latest(out)) {
+    int result = impl_->read_latest(out);
+    if (result == 1) {
+        // Success - data received
+        if (fail_count_ > 0) {
+            impl_->log("[LHM] Recovery successful after " + std::to_string(fail_count_) + " failures");
+        }
+        fail_count_ = 0;
+        retry_interval_secs_ = 0;
+        available_ = true;
+    } else if (result == 0) {
+        // No data yet - LHM still initializing, don't count as failure
+        // Just wait for next poll cycle
+    } else {
+        // Process dead (-1)
         fail_count_++;
         last_fail_time_ = std::chrono::steady_clock::now();
         retry_interval_secs_ = compute_retry_interval();
 
         if (fail_count_ >= 5) {
             available_ = false;
-            impl_->log("[LHM] Poll failed (fail_count: " + std::to_string(fail_count_)
+            impl_->log("[LHM] Process dead (fail_count: " + std::to_string(fail_count_)
                         + "), next retry in " + std::to_string(retry_interval_secs_) + "s");
         } else {
-            impl_->log("[LHM] Poll failed (attempt " + std::to_string(fail_count_) + "/5)");
+            impl_->log("[LHM] Process dead (attempt " + std::to_string(fail_count_) + "/5)");
         }
-    } else {
-        if (fail_count_ >= 5) {
-            impl_->log("[LHM] Recovery successful after " + std::to_string(fail_count_) + " failures");
-        }
-        // Full reset on success
-        fail_count_ = 0;
-        retry_interval_secs_ = 0;
-        available_ = true;
     }
     first_poll_ = false;
 }
