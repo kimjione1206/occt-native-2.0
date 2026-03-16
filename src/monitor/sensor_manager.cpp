@@ -49,6 +49,16 @@ typedef int (*nvmlDeviceGetHandleByIndex_t)(unsigned int, void**);
 typedef int (*nvmlDeviceGetTemperature_t)(void*, int, unsigned int*);
 typedef int (*nvmlDeviceGetPowerUsage_t)(void*, unsigned int*);
 typedef int (*nvmlDeviceGetName_t)(void*, char*, unsigned int);
+typedef int (*nvmlDeviceGetClockInfo_t)(void*, int, unsigned int*);
+typedef struct { unsigned int gpu; unsigned int memory; } nvmlUtilization_t;
+typedef int (*nvmlDeviceGetUtilizationRates_t)(void*, nvmlUtilization_t*);
+typedef struct { unsigned long long total; unsigned long long free; unsigned long long used; } nvmlMemory_t;
+typedef int (*nvmlDeviceGetMemoryInfo_t)(void*, nvmlMemory_t*);
+typedef int (*nvmlDeviceGetFanSpeed_t)(void*, unsigned int*);
+
+// NVML clock type constants
+#define NVML_CLOCK_GRAPHICS 0
+#define NVML_CLOCK_MEM      2
 #endif
 
 // ─── CPU TDP estimation helper (Windows only) ───────────────────────────────
@@ -1311,11 +1321,15 @@ void SensorManager::poll_nvml() {
 #endif
 
 #if !defined(__APPLE__)
-    auto getCount = LOAD_NVML(nvmlDeviceGetCount);
-    auto getHandle = LOAD_NVML(nvmlDeviceGetHandleByIndex);
-    auto getTemp = LOAD_NVML(nvmlDeviceGetTemperature);
-    auto getPower = LOAD_NVML(nvmlDeviceGetPowerUsage);
-    auto getName = LOAD_NVML(nvmlDeviceGetName);
+    auto getCount      = LOAD_NVML(nvmlDeviceGetCount);
+    auto getHandle     = LOAD_NVML(nvmlDeviceGetHandleByIndex);
+    auto getTemp       = LOAD_NVML(nvmlDeviceGetTemperature);
+    auto getPower      = LOAD_NVML(nvmlDeviceGetPowerUsage);
+    auto getName       = LOAD_NVML(nvmlDeviceGetName);
+    auto getClock      = LOAD_NVML(nvmlDeviceGetClockInfo);
+    auto getUtil       = LOAD_NVML(nvmlDeviceGetUtilizationRates);
+    auto getMemInfo    = LOAD_NVML(nvmlDeviceGetMemoryInfo);
+    auto getFanSpeed   = LOAD_NVML(nvmlDeviceGetFanSpeed);
 
     if (!getCount || !getHandle) return;
 
@@ -1332,6 +1346,7 @@ void SensorManager::poll_nvml() {
         std::string gpu_label = std::string(dev_name);
         if (count > 1) gpu_label += " #" + std::to_string(i);
 
+        // Temperature
         if (getTemp) {
             unsigned int temp = 0;
             auto ret = getTemp(device, 0 /*NVML_TEMPERATURE_GPU*/, &temp);
@@ -1343,6 +1358,7 @@ void SensorManager::poll_nvml() {
             }
         }
 
+        // Power
         if (getPower) {
             unsigned int power_mw = 0;
             auto ret = getPower(device, &power_mw);
@@ -1351,6 +1367,53 @@ void SensorManager::poll_nvml() {
                                power_mw / 1000.0, "W");
             } else {
                 update_reading(gpu_label + " Power", "GPU", 0.0, "W");  // stale prevention
+            }
+        }
+
+        // GPU Core Clock (MHz)
+        if (getClock) {
+            unsigned int clock = 0;
+            if (getClock(device, NVML_CLOCK_GRAPHICS, &clock) == 0) {
+                update_reading("GPU Core Clock", "GPU",
+                               static_cast<double>(clock), "MHz");
+            }
+        }
+
+        // GPU Memory Clock (MHz)
+        if (getClock) {
+            unsigned int clock = 0;
+            if (getClock(device, NVML_CLOCK_MEM, &clock) == 0) {
+                update_reading("GPU Memory Clock", "GPU",
+                               static_cast<double>(clock), "MHz");
+            }
+        }
+
+        // GPU Utilization (%)
+        if (getUtil) {
+            nvmlUtilization_t util{};
+            if (getUtil(device, &util) == 0) {
+                update_reading("GPU Core Load", "GPU",
+                               static_cast<double>(util.gpu), "%");
+            }
+        }
+
+        // GPU VRAM (MB)
+        if (getMemInfo) {
+            nvmlMemory_t mem{};
+            if (getMemInfo(device, &mem) == 0) {
+                update_reading("GPU Memory Used", "GPU",
+                               static_cast<double>(mem.used / (1024ULL * 1024ULL)), "MB");
+                update_reading("GPU Memory Total", "GPU",
+                               static_cast<double>(mem.total / (1024ULL * 1024ULL)), "MB");
+            }
+        }
+
+        // GPU Fan Speed (%)
+        if (getFanSpeed) {
+            unsigned int fan = 0;
+            if (getFanSpeed(device, &fan) == 0) {
+                update_reading("GPU Fan", "GPU",
+                               static_cast<double>(fan), "%");
             }
         }
     }

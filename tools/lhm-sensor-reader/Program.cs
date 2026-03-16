@@ -52,33 +52,34 @@ public class Program
             once = true;
         }
 
-        var computer = new Computer
+        // --once mode: use a single Computer instance (unchanged)
+        if (once)
         {
-            IsCpuEnabled = true,
-            IsGpuEnabled = true,
-            IsMotherboardEnabled = true,
-            IsStorageEnabled = true,
-            IsMemoryEnabled = true
-        };
+            var computer = new Computer
+            {
+                IsCpuEnabled = true,
+                IsGpuEnabled = true,
+                IsMotherboardEnabled = true,
+                IsStorageEnabled = true,
+                IsMemoryEnabled = true
+            };
 
-        try
-        {
-            computer.Open();
-        }
-        catch (Exception ex)
-        {
-            var error = new ErrorOutput { Error = "open_failed", Message = ex.Message };
-            Console.WriteLine(JsonSerializer.Serialize(error, AppJsonContext.Default.ErrorOutput));
-            return 2;
-        }
+            try
+            {
+                computer.Open();
+            }
+            catch (Exception ex)
+            {
+                var error = new ErrorOutput { Error = "open_failed", Message = ex.Message };
+                Console.WriteLine(JsonSerializer.Serialize(error, AppJsonContext.Default.ErrorOutput));
+                return 2;
+            }
 
-        try
-        {
-            if (once)
+            try
             {
                 try
                 {
-                    var output = CollectSensorData(computer);
+                    var output = CollectSensorDataOnce(computer);
                     Console.WriteLine(JsonSerializer.Serialize(output, AppJsonContext.Default.SensorOutput));
                 }
                 catch (Exception ex)
@@ -89,10 +90,54 @@ public class Program
                 }
                 return 0;
             }
+            finally
+            {
+                computer.Close();
+            }
+        }
 
-            // Loop mode — resident process, initialize once, poll repeatedly
-            Console.Error.WriteLine("[LHM-CS] Loop mode started, interval=" + loopMs + "ms");
+        // Loop mode — two Computer instances: fastComputer (CPU only) + slowComputer (GPU/MB/Storage/RAM)
+        Console.Error.WriteLine("[LHM-CS] Loop mode started, interval=" + loopMs + "ms");
 
+        // fastComputer: CPU only — no MB EC spin-wait, safe to update every cycle
+        var fastComputer = new Computer
+        {
+            IsCpuEnabled = true
+        };
+
+        // slowComputer: GPU (D3D), MB (fan/voltage EC), Storage (SMART I/O), RAM
+        // Updated asynchronously every 30 seconds so MB EC spin-wait never blocks fast loop
+        var slowComputer = new Computer
+        {
+            IsGpuEnabled = true,
+            IsMotherboardEnabled = true,
+            IsStorageEnabled = true,
+            IsMemoryEnabled = true
+        };
+
+        try
+        {
+            fastComputer.Open();
+        }
+        catch (Exception ex)
+        {
+            var error = new ErrorOutput { Error = "open_failed", Message = "fastComputer: " + ex.Message };
+            Console.WriteLine(JsonSerializer.Serialize(error, AppJsonContext.Default.ErrorOutput));
+            return 2;
+        }
+
+        try
+        {
+            slowComputer.Open();
+        }
+        catch (Exception ex)
+        {
+            // Non-fatal: fast loop can still run without slow hardware
+            Console.Error.WriteLine("[LHM-CS] slowComputer.Open() failed (non-fatal): " + ex.Message);
+        }
+
+        try
+        {
             using var cts = new CancellationTokenSource();
             Console.CancelKeyPress += (_, e) =>
             {
@@ -103,36 +148,40 @@ public class Program
 
             // Parent process exit detection: rely on stdout IOException
             // (when parent closes pipe, Console.WriteLine throws IOException)
-            // stdin monitoring removed — NUL device causes immediate EOF on some systems
 
-            // --- Classify hardware into fast/slow groups ---
-            var fastHardware = new List<IHardware>(); // CPU, GPU, MB, RAM
-            var slowHardware = new List<IHardware>(); // Storage (SMART I/O is expensive)
-
-            foreach (var hw in computer.Hardware)
-            {
-                if (hw.HardwareType == HardwareType.Storage)
-                    slowHardware.Add(hw);
-                else
-                    fastHardware.Add(hw);
-            }
-
-            Console.Error.WriteLine("[LHM-CS] Fast hardware: " + fastHardware.Count
-                + " (" + string.Join(", ", fastHardware.Select(h => h.HardwareType)) + ")");
-            Console.Error.WriteLine("[LHM-CS] Slow hardware: " + slowHardware.Count
-                + " (" + string.Join(", ", slowHardware.Select(h => h.HardwareType)) + ")");
+            // slowCache: last results from slowComputer, merged into every JSON output
+            var slowCache = new List<HardwareEntry>();
+            var slowCacheLock = new object();
 
             int cycleCount = 0;
-            const int slowIntervalMs = 30000; // Storage: every 30 seconds
+            const int slowIntervalMs = 30000; // slowComputer: every 30 seconds
             var slowStopwatch = System.Diagnostics.Stopwatch.StartNew();
             bool slowUpdateRunning = false;
 
-            // Initial slow update (first cycle includes all hardware)
-            foreach (var hw in slowHardware)
+            // Initial slow update synchronously (first cycle includes slow hardware too)
+            try
             {
-                hw.Update();
-                foreach (var sub in hw.SubHardware)
-                    sub.Update();
+                var initSw = System.Diagnostics.Stopwatch.StartNew();
+                var initialSlow = new List<HardwareEntry>();
+                foreach (var hw in slowComputer.Hardware)
+                {
+                    hw.Update();
+                    foreach (var sub in hw.SubHardware)
+                        sub.Update();
+                    initialSlow.Add(BuildHardwareEntry(hw));
+                    foreach (var sub in hw.SubHardware)
+                        initialSlow.Add(BuildHardwareEntry(sub));
+                }
+                initSw.Stop();
+                lock (slowCacheLock)
+                {
+                    slowCache = initialSlow;
+                }
+                Console.Error.WriteLine("[LHM-CS] Initial slow update DONE (" + initSw.ElapsedMilliseconds + "ms, hw=" + initialSlow.Count + ")");
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine("[LHM-CS] Initial slow update error (non-fatal): " + ex.Message);
             }
 
             while (!cts.Token.IsCancellationRequested)
@@ -142,15 +191,18 @@ public class Program
                     cycleCount++;
                     var sw = System.Diagnostics.Stopwatch.StartNew();
 
-                    // Fast loop: CPU + GPU + MB + RAM (every cycle)
-                    foreach (var hw in fastHardware)
+                    // Fast loop: CPU only — update directly (no EC spin-wait)
+                    foreach (var hw in fastComputer.Hardware)
                     {
                         hw.Update();
                         foreach (var sub in hw.SubHardware)
                             sub.Update();
                     }
 
-                    // Slow loop: Storage (every 30 seconds, async — never blocks fast loop)
+                    sw.Stop();
+                    long fastMs = sw.ElapsedMilliseconds;
+
+                    // Slow loop: GPU/MB/Storage/RAM — async, never blocks fast loop
                     if (!slowUpdateRunning && slowStopwatch.ElapsedMilliseconds >= slowIntervalMs)
                     {
                         slowUpdateRunning = true;
@@ -159,16 +211,24 @@ public class Program
                         {
                             try
                             {
-                                Console.Error.WriteLine("[LHM-CS] Cycle " + cycle + ": Slow update START (Storage)");
+                                Console.Error.WriteLine("[LHM-CS] Cycle " + cycle + ": Slow update START (GPU/MB/Storage/RAM)");
                                 var ssw = System.Diagnostics.Stopwatch.StartNew();
-                                foreach (var hw in slowHardware)
+                                var newSlowEntries = new List<HardwareEntry>();
+                                foreach (var hw in slowComputer.Hardware)
                                 {
                                     hw.Update();
                                     foreach (var sub in hw.SubHardware)
                                         sub.Update();
+                                    newSlowEntries.Add(BuildHardwareEntry(hw));
+                                    foreach (var sub in hw.SubHardware)
+                                        newSlowEntries.Add(BuildHardwareEntry(sub));
                                 }
                                 ssw.Stop();
-                                Console.Error.WriteLine("[LHM-CS] Cycle " + cycle + ": Slow update DONE (" + ssw.ElapsedMilliseconds + "ms)");
+                                lock (slowCacheLock)
+                                {
+                                    slowCache = newSlowEntries;
+                                }
+                                Console.Error.WriteLine("[LHM-CS] Cycle " + cycle + ": Slow update DONE (" + ssw.ElapsedMilliseconds + "ms, hw=" + newSlowEntries.Count + ")");
                             }
                             catch (Exception ex)
                             {
@@ -182,10 +242,20 @@ public class Program
                         });
                     }
 
-                    sw.Stop();
-                    var output = CollectSensorData(computer);
-                    Console.Error.WriteLine("[LHM-CS] Cycle " + cycleCount + ": " + sw.ElapsedMilliseconds + "ms, hw="
-                        + output.Hardware.Count + " sensors=" + output.Hardware.Sum(h => h.Sensors.Count));
+                    // Build output: fastComputer sensors + cached slowComputer sensors
+                    List<HardwareEntry> currentSlowCache;
+                    lock (slowCacheLock)
+                    {
+                        currentSlowCache = new List<HardwareEntry>(slowCache);
+                    }
+
+                    var output = CollectSensorData(fastComputer, currentSlowCache);
+
+                    Console.Error.WriteLine("[LHM-CS] Cycle " + cycleCount
+                        + ": fast=" + fastMs + "ms"
+                        + ", hw=" + output.Hardware.Count
+                        + ", sensors=" + output.Hardware.Sum(h => h.Sensors.Count));
+
                     var json = JsonSerializer.Serialize(output, AppJsonContext.Default.SensorOutput);
                     Console.WriteLine(json);
                     Console.Out.Flush();
@@ -225,23 +295,44 @@ public class Program
         }
         finally
         {
-            computer.Close();
+            fastComputer.Close();
+            slowComputer.Close();
         }
     }
 
-    private static SensorOutput CollectSensorData(Computer computer)
+    /// <summary>
+    /// Loop mode: merge fastComputer sensor data with cached slowComputer entries.
+    /// </summary>
+    private static SensorOutput CollectSensorData(Computer fastComputer, List<HardwareEntry> slowCache)
+    {
+        var hardwareList = new List<HardwareEntry>();
+
+        // Fast hardware (CPU): read current sensor values
+        foreach (var hw in fastComputer.Hardware)
+        {
+            hardwareList.Add(BuildHardwareEntry(hw));
+            foreach (var sub in hw.SubHardware)
+                hardwareList.Add(BuildHardwareEntry(sub));
+        }
+
+        // Slow hardware (GPU/MB/Storage/RAM): use cached entries
+        hardwareList.AddRange(slowCache);
+
+        return new SensorOutput { Hardware = hardwareList };
+    }
+
+    /// <summary>
+    /// --once mode: collect from a single Computer instance (unchanged behaviour).
+    /// </summary>
+    private static SensorOutput CollectSensorDataOnce(Computer computer)
     {
         var hardwareList = new List<HardwareEntry>();
 
         foreach (var hw in computer.Hardware)
         {
-            // Update() is already called by computer.Accept(visitor) in the loop
             hardwareList.Add(BuildHardwareEntry(hw));
-
             foreach (var sub in hw.SubHardware)
-            {
                 hardwareList.Add(BuildHardwareEntry(sub));
-            }
         }
 
         return new SensorOutput { Hardware = hardwareList };
