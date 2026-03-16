@@ -179,24 +179,28 @@ struct LhmBridge::Impl {
             return -1;
         }
 
-        log("[LHM-DIAG] PeekNamedPipe: avail=" + std::to_string(avail));
+        // 진단 로그는 데이터가 있을 때만 (매 poll 로그 스팸 방지)
 
         if (avail == 0) return 0;  // 아직 데이터 없음
 
-        // 읽기
-        char buf[4096];
-        DWORD bytesRead = 0;
-        DWORD toRead = (avail < sizeof(buf)) ? avail : static_cast<DWORD>(sizeof(buf));
-        if (!ReadFile(hStdoutRead, buf, toRead, &bytesRead, nullptr) || bytesRead == 0) {
-            log("[LHM-DIAG] ReadFile failed or 0 bytes");
-            return 0;
+        // 가용 데이터 전부 읽기 (여러 JSON 줄이 쌓여 있을 수 있음)
+        char buf[16384];
+        DWORD totalRead = 0;
+        while (avail > 0) {
+            DWORD bytesRead = 0;
+            DWORD toRead = (avail < sizeof(buf)) ? avail : static_cast<DWORD>(sizeof(buf));
+            if (!ReadFile(hStdoutRead, buf, toRead, &bytesRead, nullptr) || bytesRead == 0)
+                break;
+            line_buffer.append(buf, bytesRead);
+            totalRead += bytesRead;
+            // 남은 데이터 확인
+            avail = 0;
+            PeekNamedPipe(hStdoutRead, nullptr, 0, nullptr, &avail, nullptr);
         }
 
-        log("[LHM-DIAG] ReadFile: bytesRead=" + std::to_string(bytesRead));
+        if (totalRead == 0) return 0;
 
-        line_buffer.append(buf, bytesRead);
-
-        // 마지막 완전한 줄 찾기
+        // 마지막 완전한 줄 찾기 (가장 최신 데이터)
         std::string lastLine;
         size_t pos;
         while ((pos = line_buffer.find('\n')) != std::string::npos) {
