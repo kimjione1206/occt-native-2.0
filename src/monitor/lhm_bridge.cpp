@@ -152,6 +152,9 @@ struct LhmBridge::Impl {
         // 프로세스 상태 확인
         if (hProcess == INVALID_HANDLE_VALUE) return -1;
         if (WaitForSingleObject(hProcess, 0) != WAIT_TIMEOUT) {
+            DWORD exitCode = 0;
+            GetExitCodeProcess(hProcess, &exitCode);
+            log("[LHM] Helper process exited (exit code: " + std::to_string(exitCode) + ")");
             process_running = false;
             return -1;  // 프로세스 종료됨
         }

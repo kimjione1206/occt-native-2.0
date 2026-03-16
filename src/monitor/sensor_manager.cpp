@@ -216,7 +216,7 @@ QVector<HardwareNode> SensorManager::get_hardware_tree() const {
 double SensorManager::get_cpu_temperature() const {
     std::lock_guard<std::mutex> lk(readings_mutex_);
     for (const auto& r : readings_) {
-        if (r.category == "CPU" && r.unit == "C") {
+        if (r.category == "CPU" && r.unit == "C" && r.value > 0.0) {
             return r.value;
         }
     }
@@ -1020,8 +1020,8 @@ void SensorManager::poll_wmi() {
                             std::cerr << "[Sensor] Win32_PerfFormattedData_Counters_ThermalZoneInformation also returned 0 zones" << std::endl;
                             perf_thermal_logged = true;
                         }
-                        // Stale prevention: explicitly set 0 when no thermal data available
-                        update_reading("ACPI Zone 0", "CPU", 0.0, "C");
+                        // No thermal data available — do NOT write 0 to readings_
+                        // (preserves any previous valid LHM reading)
                     }
                 }
             }
