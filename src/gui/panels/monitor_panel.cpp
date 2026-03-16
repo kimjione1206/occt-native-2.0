@@ -17,46 +17,37 @@ MonitorPanel::MonitorPanel(QWidget* parent)
 {
     setupUi();
 
-    // Create a SensorManager and initialize it for real hardware polling
-    ownedSensorMgr_ = std::make_unique<SensorManager>();
-    if (ownedSensorMgr_->initialize()) {
-        ownedSensorMgr_->start_polling(500);
-        sensorMgr_ = ownedSensorMgr_.get();
-    } else {
-        // Initialization failed; show placeholder structure
-        ownedSensorMgr_.reset();
-
-        addSensorCategory("CPU", {
-            "Package Temperature",
-            "Core 0 Temperature",
-            "Core 1 Temperature",
-            "Core 2 Temperature",
-            "Core 3 Temperature",
-            "CPU Package Power",
-            "CPU Clock Speed",
-            "CPU Usage"
-        });
-        addSensorCategory("GPU", {
-            "GPU Temperature",
-            "GPU Core Clock",
-            "GPU Memory Clock",
-            "GPU Usage",
-            "GPU Power",
-            "VRAM Usage"
-        });
-        addSensorCategory("Motherboard", {
-            "System Temperature",
-            "VRM Temperature",
-            "Fan Speed (CPU)",
-            "Fan Speed (System)"
-        });
-        addSensorCategory("Storage", {
-            "Disk Temperature",
-            "Read Speed",
-            "Write Speed",
-            "Disk Usage"
-        });
-    }
+    // Show placeholder until setSensorManager() is called from MainWindow
+    addSensorCategory("CPU", {
+        "Package Temperature",
+        "Core 0 Temperature",
+        "Core 1 Temperature",
+        "Core 2 Temperature",
+        "Core 3 Temperature",
+        "CPU Package Power",
+        "CPU Clock Speed",
+        "CPU Usage"
+    });
+    addSensorCategory("GPU", {
+        "GPU Temperature",
+        "GPU Core Clock",
+        "GPU Memory Clock",
+        "GPU Usage",
+        "GPU Power",
+        "VRAM Usage"
+    });
+    addSensorCategory("Motherboard", {
+        "System Temperature",
+        "VRM Temperature",
+        "Fan Speed (CPU)",
+        "Fan Speed (System)"
+    });
+    addSensorCategory("Storage", {
+        "Disk Temperature",
+        "Read Speed",
+        "Write Speed",
+        "Disk Usage"
+    });
     sensorTree_->expandAll();
 
     updateTimer_ = new QTimer(this);
@@ -64,21 +55,8 @@ MonitorPanel::MonitorPanel(QWidget* parent)
     updateTimer_->start(1000);
 }
 
-MonitorPanel::~MonitorPanel() {
-    if (ownedSensorMgr_) {
-        ownedSensorMgr_->stop();
-    }
-    // ownedSensorMgr_ is automatically destroyed by unique_ptr
-}
-
 void MonitorPanel::setSensorManager(SensorManager* mgr) {
     if (!mgr) return;
-
-    // If externally injected, stop and release our own instance
-    if (ownedSensorMgr_ && mgr != ownedSensorMgr_.get()) {
-        ownedSensorMgr_->stop();
-        ownedSensorMgr_.reset();
-    }
     sensorMgr_ = mgr;
 
     // Rebuild the sensor tree with live data from the new manager,

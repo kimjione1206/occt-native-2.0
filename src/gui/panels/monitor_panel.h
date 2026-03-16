@@ -8,8 +8,6 @@
 #include <QPushButton>
 #include <QSplitter>
 
-#include <memory>
-
 namespace occt {
 class SensorManager;
 class WheaMonitor;
@@ -24,7 +22,7 @@ class MonitorPanel : public QWidget {
 
 public:
     explicit MonitorPanel(QWidget* parent = nullptr);
-    ~MonitorPanel() override;
+    ~MonitorPanel() override = default;
 
     /// Inject the sensor manager instance (owned externally).
     void setSensorManager(SensorManager* mgr);
@@ -56,8 +54,7 @@ private:
     QString selectedSensor_;
     bool monitorOnlyMode_ = false;
 
-    SensorManager* sensorMgr_ = nullptr;                  // non-owning; points to external or owned
-    std::unique_ptr<SensorManager> ownedSensorMgr_;       // owned only when created internally
+    SensorManager* sensorMgr_ = nullptr;                  // non-owning; injected by MainWindow
     WheaMonitor*   wheaMon_   = nullptr;
 };
 
