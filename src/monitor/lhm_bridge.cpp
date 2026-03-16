@@ -64,7 +64,7 @@ struct LhmBridge::Impl {
 
         process = new QProcess(parent);
         process->setProgram(helper_path);
-        process->setArguments({"--loop", "2000"});
+        process->setArguments({"--loop", "500"});
         process->start();
 
         if (!process->waitForStarted(5000)) {
@@ -110,7 +110,7 @@ struct LhmBridge::Impl {
 
         // Wait briefly for data if none available
         if (!process->canReadLine()) {
-            process->waitForReadyRead(500);
+            process->waitForReadyRead(100);
         }
 
         // Read all available complete lines, keep only the last one (most recent data)

@@ -923,7 +923,7 @@ void SensorManager::poll_wmi() {
             if (cur_temp > 0.0 && cur_temp == prev_lhm_cpu_temp_ &&
                 cur_power == prev_lhm_cpu_power_) {
                 lhm_stale_count_++;
-                if (lhm_stale_count_ >= 10) {  // 5s at 500ms interval
+                if (lhm_stale_count_ >= 20) {  // 10s at 500ms interval
                     std::cerr << "[Sensor] LHM data appears stale (unchanged for "
                               << (lhm_stale_count_ / 2) << "s)" << std::endl;
                 }

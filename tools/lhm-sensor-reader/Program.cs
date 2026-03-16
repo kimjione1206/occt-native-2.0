@@ -166,12 +166,11 @@ public class Program
 
         foreach (var hw in computer.Hardware)
         {
-            hw.Update();
+            // Update() is already called by computer.Accept(visitor) in the loop
             hardwareList.Add(BuildHardwareEntry(hw));
 
             foreach (var sub in hw.SubHardware)
             {
-                sub.Update();
                 hardwareList.Add(BuildHardwareEntry(sub));
             }
         }
