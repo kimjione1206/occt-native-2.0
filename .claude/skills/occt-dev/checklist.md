@@ -25,6 +25,10 @@
 - [ ] Windows: WMI, GetSystemTimes, NVML/ADL
 - [ ] macOS: NSProcessInfo, IOKit Battery, Mach host_processor_info
 - [ ] Linux: sysfs hwmon, /proc/stat
+- [ ] LHM bridge: QProcess 사용 금지 (Win32 API만 사용)
+- [ ] LHM bridge: std::thread에서 호출되므로 Qt 이벤트 루프 의존 API 금지
+- [ ] sensor_manager.cpp 구조 변경 금지 (CI hang 위험)
+- [ ] 에러 시 update_reading(0) 호출하여 stale 값 방지
 
 ## GUI 패널 수정
 

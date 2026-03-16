@@ -1,7 +1,7 @@
 #include "lhm_bridge.h"
 
 #ifdef _WIN32
-#include <QProcess>
+#include <windows.h>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonArray>
@@ -22,8 +22,15 @@ namespace occt {
 struct LhmBridge::Impl {
     QString helper_path;
     QString log_file_;
-    QProcess* process = nullptr;       // persistent helper process
+
+    // Win32 프로세스 핸들
+    HANDLE hProcess = INVALID_HANDLE_VALUE;
+    HANDLE hStdoutRead = INVALID_HANDLE_VALUE;
+    HANDLE hStdoutWrite = INVALID_HANDLE_VALUE;
     bool process_running = false;
+
+    // 라인 버퍼 (파이프에서 부분 읽기 처리)
+    std::string line_buffer;
 
     void log(const std::string& msg) {
         if (log_file_.isEmpty()) {
@@ -57,82 +64,139 @@ struct LhmBridge::Impl {
         return false;
     }
 
-    bool start_helper(QObject* parent) {
-        if (process) {
-            stop_helper();
+    bool start_helper() {
+        stop_helper();  // 기존 프로세스 정리
+
+        // stdout 파이프 생성
+        SECURITY_ATTRIBUTES sa = { sizeof(sa), nullptr, TRUE };
+        if (!CreatePipe(&hStdoutRead, &hStdoutWrite, &sa, 0)) {
+            log("[LHM] CreatePipe failed: " + std::to_string(GetLastError()));
+            return false;
         }
+        SetHandleInformation(hStdoutRead, HANDLE_FLAG_INHERIT, 0);  // 읽기 핸들은 상속 안 함
 
-        process = new QProcess(parent);
-        process->setProgram(helper_path);
-        process->setArguments({"--loop", "500"});
-        process->start();
+        // 프로세스 생성
+        STARTUPINFOW si = {};
+        si.cb = sizeof(si);
+        si.dwFlags = STARTF_USESTDHANDLES;
+        si.hStdOutput = hStdoutWrite;
+        si.hStdError = hStdoutWrite;
+        si.hStdInput = INVALID_HANDLE_VALUE;
 
-        if (!process->waitForStarted(5000)) {
-            log("[LHM] Failed to start persistent helper");
-            delete process;
-            process = nullptr;
-            process_running = false;
+        PROCESS_INFORMATION pi = {};
+        std::wstring cmdLine = helper_path.toStdWString() + L" --loop 500";
+
+        if (!CreateProcessW(nullptr, cmdLine.data(), nullptr, nullptr, TRUE,
+                            CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi)) {
+            log("[LHM] CreateProcess failed: " + std::to_string(GetLastError()));
+            CloseHandle(hStdoutRead);  hStdoutRead = INVALID_HANDLE_VALUE;
+            CloseHandle(hStdoutWrite); hStdoutWrite = INVALID_HANDLE_VALUE;
             return false;
         }
 
-        process_running = true;
-        log("[LHM] Started persistent helper (PID: "
-            + std::to_string(process->processId()) + ")");
+        hProcess = pi.hProcess;
+        CloseHandle(pi.hThread);  // 스레드 핸들 불필요
 
-        // Wait for first line of output (LHM initialization takes time)
-        if (!process->waitForReadyRead(15000)) {
-            log("[LHM] Helper started but no data within 15s, continuing anyway");
+        // 쓰기 핸들 닫기 (부모에서는 읽기만)
+        CloseHandle(hStdoutWrite);
+        hStdoutWrite = INVALID_HANDLE_VALUE;
+
+        process_running = true;
+        log("[LHM] Started persistent helper (PID: " + std::to_string(pi.dwProcessId) + ")");
+
+        // 첫 데이터 대기 (최대 15초, 1초 간격 폴링)
+        for (int i = 0; i < 15; ++i) {
+            DWORD avail = 0;
+            if (PeekNamedPipe(hStdoutRead, nullptr, 0, nullptr, &avail, nullptr) && avail > 0) {
+                log("[LHM] First data available after " + std::to_string(i) + "s");
+                return true;
+            }
+            // 프로세스가 죽었는지 확인
+            if (WaitForSingleObject(hProcess, 0) != WAIT_TIMEOUT) {
+                log("[LHM] Helper exited during initialization");
+                stop_helper();
+                return false;
+            }
+            Sleep(1000);
         }
 
+        log("[LHM] No data within 15s, continuing anyway");
         return true;
     }
 
     void stop_helper() {
-        if (!process) return;
-
-        log("[LHM] Stopping persistent helper");
-        process->terminate();
-        if (!process->waitForFinished(3000)) {
-            process->kill();
-            process->waitForFinished(1000);
+        if (hProcess != INVALID_HANDLE_VALUE) {
+            TerminateProcess(hProcess, 0);
+            WaitForSingleObject(hProcess, 3000);
+            CloseHandle(hProcess);
+            hProcess = INVALID_HANDLE_VALUE;
         }
-        delete process;
-        process = nullptr;
+        if (hStdoutRead != INVALID_HANDLE_VALUE) {
+            CloseHandle(hStdoutRead);
+            hStdoutRead = INVALID_HANDLE_VALUE;
+        }
+        if (hStdoutWrite != INVALID_HANDLE_VALUE) {
+            CloseHandle(hStdoutWrite);
+            hStdoutWrite = INVALID_HANDLE_VALUE;
+        }
         process_running = false;
+        line_buffer.clear();
     }
 
     // Returns: 1 = success, 0 = no data yet (not an error), -1 = process dead
     int read_latest(std::vector<SensorReading>& out) {
-        if (!process || process->state() == QProcess::NotRunning) {
+        // 프로세스 상태 확인
+        if (hProcess == INVALID_HANDLE_VALUE) return -1;
+        if (WaitForSingleObject(hProcess, 0) != WAIT_TIMEOUT) {
             process_running = false;
+            return -1;  // 프로세스 종료됨
+        }
+
+        // 파이프에서 가용 데이터 확인
+        DWORD avail = 0;
+        if (!PeekNamedPipe(hStdoutRead, nullptr, 0, nullptr, &avail, nullptr)) {
             return -1;
         }
 
-        // Wait briefly for data if none available
-        if (!process->canReadLine()) {
-            process->waitForReadyRead(100);
+        if (avail == 0) return 0;  // 아직 데이터 없음
+
+        // 읽기
+        char buf[4096];
+        DWORD bytesRead = 0;
+        DWORD toRead = (avail < sizeof(buf)) ? avail : static_cast<DWORD>(sizeof(buf));
+        if (!ReadFile(hStdoutRead, buf, toRead, &bytesRead, nullptr) || bytesRead == 0) {
+            return 0;
         }
 
-        // Read all available complete lines, keep only the last one (most recent data)
-        QByteArray lastLine;
-        while (process->canReadLine()) {
-            lastLine = process->readLine().trimmed();
+        line_buffer.append(buf, bytesRead);
+
+        // 마지막 완전한 줄 찾기
+        std::string lastLine;
+        size_t pos;
+        while ((pos = line_buffer.find('\n')) != std::string::npos) {
+            lastLine = line_buffer.substr(0, pos);
+            line_buffer.erase(0, pos + 1);
         }
 
-        if (lastLine.isEmpty()) {
-            return 0;  // No data yet, not a failure
+        if (lastLine.empty()) return 0;  // 완전한 줄 아직 없음
+
+        // '\r' 제거 (Windows 줄바꿈)
+        if (!lastLine.empty() && lastLine.back() == '\r') {
+            lastLine.pop_back();
         }
 
-        // Parse JSON
+        // JSON 파싱
+        QByteArray jsonData = QByteArray::fromRawData(lastLine.data(),
+                                                       static_cast<int>(lastLine.size()));
         QJsonParseError err;
-        QJsonDocument doc = QJsonDocument::fromJson(lastLine, &err);
+        QJsonDocument doc = QJsonDocument::fromJson(jsonData, &err);
         if (err.error != QJsonParseError::NoError) {
             log("[LHM] JSON parse error: " + err.errorString().toStdString()
                 + " at offset " + std::to_string(err.offset));
-            return false;
+            return 0;
         }
 
-        if (!doc.isObject()) return false;
+        if (!doc.isObject()) return 0;
         QJsonObject root = doc.object();
 
         // Expected JSON format:
@@ -175,7 +239,7 @@ LhmBridge::~LhmBridge() {
 
 bool LhmBridge::initialize() {
     // Prevent double initialization
-    if (available_ || (impl_->process && impl_->process->state() == QProcess::Running)) {
+    if (available_ || impl_->process_running) {
         return available_;
     }
 
@@ -188,7 +252,7 @@ bool LhmBridge::initialize() {
     impl_->log("[LHM] Found helper at: " + impl_->helper_path.toStdString());
 
     // Start the persistent helper process
-    if (impl_->start_helper(this)) {
+    if (impl_->start_helper()) {
         available_ = true;
     } else {
         impl_->log("[LHM] Failed to start persistent helper, using WMI fallback");
@@ -212,7 +276,7 @@ void LhmBridge::poll(std::vector<SensorReading>& out) {
                     + "s backoff (fail_count: " + std::to_string(fail_count_) + ")");
 
         // Try to restart the helper process
-        if (impl_->start_helper(this)) {
+        if (impl_->start_helper()) {
             available_ = true;
         } else {
             // Restart failed, update backoff and wait longer
@@ -227,9 +291,9 @@ void LhmBridge::poll(std::vector<SensorReading>& out) {
     if (!available_) return;
 
     // If helper process died, try to restart it
-    if (!impl_->process || impl_->process->state() == QProcess::NotRunning) {
+    if (!impl_->process_running) {
         impl_->log("[LHM] Helper crashed, restarting...");
-        if (!impl_->start_helper(this)) {
+        if (!impl_->start_helper()) {
             fail_count_++;
             last_fail_time_ = std::chrono::steady_clock::now();
             retry_interval_secs_ = compute_retry_interval();

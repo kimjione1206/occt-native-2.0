@@ -1,7 +1,7 @@
 # OCCT Native - 전체 코드 구조
 
 > 이 문서는 프로젝트 수정 시 반드시 참고해야 하는 코드 구조 레퍼런스입니다.
-> 최종 업데이트: 2026-03-15 (LogUploader Gist 업로드, PostUpdateRunner 스모크 테스트)
+> 최종 업데이트: 2026-03-16 (LHM bridge Win32 API 전환 반영, 스레딩 제약 문서화)
 
 ## 프로젝트 개요
 
@@ -48,7 +48,7 @@ occt-native/
 │   │   ├── sensor_model.h/cpp      # 하드웨어 트리 구조
 │   │   ├── system_info.h/cpp       # 시스템 사양 수집
 │   │   ├── whea_monitor.h/cpp      # Windows WHEA 이벤트
-│   │   └── lhm_bridge.h/cpp       # LibreHardwareMonitor 연동 (30s 타임아웃, 5회 재시도, fail_count_, 파일 로깅)
+│   │   └── lhm_bridge.h/cpp       # LibreHardwareMonitor 연동 (Win32 CreateProcess + PeekNamedPipe 기반, 상주 프로세스, QProcess 미사용)
 │   ├── safety/                 # 안전 시스템
 │   │   └── guardian.h/cpp          # 온도/전력 리밋 → 긴급정지
 │   ├── gui/                    # Qt GUI
@@ -171,8 +171,10 @@ MainWindow
 ```
 SensorManager::poll_thread (500ms)
   ├── [Windows] LHM bridge (lhm_bridge_) → 정확한 하드웨어 모니터링 (최우선)
-  │   ├── LibreHardwareMonitor DLL → CPU/GPU/MB 온도, 전력, 팬 RPM
-  │   ├── 타임아웃 30초 (기존 5초), 5회 재시도 후 비활성화 (fail_count_)
+  │   ├── Win32 CreateProcess + CreatePipe → lhm-sensor-reader.exe 상주 프로세스
+  │   ├── Win32 파이프 I/O, 500ms 간격 JSON Lines 수신 (QProcess 미사용)
+  │   ├── 첫 데이터 대기 최대 15초, 프로세스 죽음 시 백오프 재시도 (영구 비활성화 없음)
+  │   ├── ⚠ lhm_bridge는 std::thread에서 호출됨, QProcess 사용 불가
   │   └── 파일 로깅 → logs/lhm_bridge.log
   ├── [Windows] poll_wmi() → 캐시된 WMI COM 연결 사용 (wmi_svc_root_wmi_, wmi_svc_cimv2_)
   │   ├── Temperature fallback chain:
