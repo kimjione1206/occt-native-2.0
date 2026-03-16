@@ -235,16 +235,30 @@ double SensorManager::get_gpu_temperature() const {
 
 double SensorManager::get_cpu_power() const {
     std::lock_guard<std::mutex> lk(readings_mutex_);
+    // Prefer LHM "Package" sensor (real RAPL measurement) over WMI TDP estimate
+    double package_power = 0.0;
+    double any_power = 0.0;
     for (const auto& r : readings_) {
         if (r.category == "CPU" && r.unit == "W") {
-            return r.value;
+            if (r.name == "Package" && r.value > 0.0) {
+                package_power = r.value;
+            }
+            if (any_power == 0.0 && r.value > 0.0) {
+                any_power = r.value;
+            }
         }
     }
-    return 0.0;
+    return (package_power > 0.0) ? package_power : any_power;
 }
 
 bool SensorManager::is_cpu_power_estimated() const {
     std::lock_guard<std::mutex> lk(readings_mutex_);
+    // If LHM Package sensor exists with real data, it's not estimated
+    for (const auto& r : readings_) {
+        if (r.category == "CPU" && r.unit == "W" && r.name == "Package" && r.value > 0.0) {
+            return false;
+        }
+    }
     return cpu_power_estimated_;
 }
 
