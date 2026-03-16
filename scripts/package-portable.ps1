@@ -90,15 +90,15 @@ foreach ($lf in $licenseFiles) {
     }
 }
 
-# Copy LHM sensor reader helper if it exists
-$lhmExe = Join-Path $BuildDir "$BuildType\tools\lhm-sensor-reader.exe"
-if (Test-Path $lhmExe) {
-    $toolsDir = Join-Path $StagingDir "tools"
-    New-Item -ItemType Directory -Path $toolsDir -Force | Out-Null
-    Copy-Item -Path $lhmExe -Destination "$toolsDir/" -Force
-    Write-Host "  Copied: lhm-sensor-reader.exe -> tools/"
+# Copy LHM sensor reader helper folder if it exists
+$lhmDir = Join-Path $BuildDir "$BuildType\tools\lhm"
+if (Test-Path $lhmDir) {
+    $toolsLhmDir = Join-Path $StagingDir "tools\lhm"
+    New-Item -ItemType Directory -Path $toolsLhmDir -Force | Out-Null
+    Copy-Item -Path "$lhmDir\*" -Destination "$toolsLhmDir\" -Recurse -Force
+    Write-Host "  Copied: lhm folder -> tools/lhm/"
 } else {
-    Write-Host "  Note: lhm-sensor-reader.exe not found, skipping."
+    Write-Host "  Note: lhm helper folder not found, skipping."
 }
 
 Write-Host "  Staging: $StagingDir"

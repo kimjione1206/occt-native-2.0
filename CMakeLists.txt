@@ -3,7 +3,7 @@ cmake_minimum_required(VERSION 3.21)
 # ─── 프로젝트 정의 ───────────────────────────────────────────────────────────
 set(OCCT_VERSION_MAJOR 1)
 set(OCCT_VERSION_MINOR 7)
-set(OCCT_VERSION_PATCH 0)
+set(OCCT_VERSION_PATCH 1)
 set(OCCT_VERSION_STRING "${OCCT_VERSION_MAJOR}.${OCCT_VERSION_MINOR}.${OCCT_VERSION_PATCH}")
 
 project(OCCTNativeStressTest
@@ -280,13 +280,13 @@ if(WIN32)
         find_program(DOTNET_EXE dotnet)
         if(DOTNET_EXE)
             set(LHM_PROJECT "${CMAKE_SOURCE_DIR}/tools/lhm-sensor-reader/lhm-sensor-reader.csproj")
-            set(LHM_OUTPUT_DIR "${CMAKE_BINARY_DIR}/${CMAKE_BUILD_TYPE}/tools")
+            set(LHM_OUTPUT_DIR "${CMAKE_BINARY_DIR}/${CMAKE_BUILD_TYPE}/tools/lhm")
             add_custom_target(lhm_sensor_reader ALL
                 COMMAND ${DOTNET_EXE} publish "${LHM_PROJECT}"
                     -c Release -r win-x64 --self-contained true
-                    -p:PublishSingleFile=true -p:PublishTrimmed=true -p:TrimMode=partial
+                    -p:PublishTrimmed=true -p:TrimMode=partial
                     -o "${LHM_OUTPUT_DIR}"
-                COMMENT "Building lhm-sensor-reader helper..."
+                COMMENT "Building lhm-sensor-reader helper (folder deploy)..."
                 VERBATIM
             )
         else()

@@ -47,10 +47,14 @@ struct LhmBridge::Impl {
 
     bool find_helper() {
         // Look for lhm-sensor-reader.exe next to the application
+        // 폴더 배포 경로 (tools/lhm/) 우선, 단일 파일 경로도 호환성 유지
         QStringList search_paths = {
+            QCoreApplication::applicationDirPath() + "/tools/lhm",
+            QCoreApplication::applicationDirPath() + "/../tools/lhm",
             QCoreApplication::applicationDirPath(),
             QCoreApplication::applicationDirPath() + "/tools",
             QCoreApplication::applicationDirPath() + "/../tools",
+            QDir::currentPath() + "/tools/lhm",
             QDir::currentPath()
         };
 
